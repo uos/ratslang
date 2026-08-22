@@ -1172,6 +1172,7 @@ fn macro_resolve_int() -> anyhow::Result<()> {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn macro_resolve_float() -> anyhow::Result<()> {
     struct Configs {
         user: VariableHistory,

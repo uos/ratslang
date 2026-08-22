@@ -1078,7 +1078,7 @@ fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned
         }
         Err(errs) => {
             for err in errs {
-                Report::build(ReportKind::Error, (), err.span().start)
+                Report::build(ReportKind::Error, err.span().into_range())
                     .with_code(3)
                     .with_message(err.to_string())
                     .with_label(
@@ -2252,7 +2252,7 @@ pub fn compile_code_with_state(
             let src = Source::from(source_code_raw);
             for err in errs {
                 if rich_out {
-                    let e = Report::build(ReportKind::Error, (), err.span().start)
+                    let e = Report::build(ReportKind::Error, err.span().into_range())
                         .with_code(3)
                         .with_message(err.to_string())
                         .with_label(
@@ -2270,7 +2270,7 @@ pub fn compile_code_with_state(
                         err.span().end,
                         err.reason().to_string(),
                     );
-                    out.write(msg.as_bytes()).unwrap();
+                    out.write_all(msg.as_bytes()).unwrap();
                 }
             }
         }
