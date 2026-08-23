@@ -1,6 +1,6 @@
 [package]
 name = "ratslang"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 authors = ["Christopher Sieh <stelzo@steado.de>"]
 description = "A minimal and extensible configuration language for fallible humans working with physical systems."

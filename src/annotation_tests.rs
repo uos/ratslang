@@ -312,4 +312,73 @@ preprocessing {
         assert!(filtered.contains("bypass_output_downsample"));
         assert!(filtered.contains("Output the full undistorted cloud"));
     }
+
+    #[test]
+    fn test_annotation_multiline_comments_in_block() {
+        const SRC: &str = r#"
+sensor {
+    # @recommended
+    # This is a multi-line comment.
+    # It has several lines of explanation.
+    # Line three of the comment.
+    range = 10m..50m
+
+    # @recommended
+    # Another comment block.
+    # Second line of second comment block.
+    fov = 60
 }
+"#;
+
+        let eval = compile_code(SRC).expect("Failed to compile");
+        let filtered = eval
+            .to_string_filtered("recommended")
+            .expect("Failed to get filtered string");
+
+        let expected = r#"sensor {
+  # This is a multi-line comment.
+  # It has several lines of explanation.
+  # Line three of the comment.
+  range = 10m..50m
+
+  # Another comment block.
+  # Second line of second comment block.
+  fov = 60
+}
+"#;
+
+        assert_eq!(filtered, expected);
+    }
+
+    #[test]
+    fn test_annotation_multiline_comments_at_root() {
+        const SRC: &str = r#"
+# @recommended
+# This is top-level comment line 1.
+# This is top-level comment line 2.
+timeout = 5000
+
+# @recommended
+# Another top-level comment line 1.
+# Another top-level comment line 2.
+retries = 3
+"#;
+
+        let eval = compile_code(SRC).expect("Failed to compile");
+        let filtered = eval
+            .to_string_filtered("recommended")
+            .expect("Failed to get filtered string");
+
+        let expected = r#"# This is top-level comment line 1.
+# This is top-level comment line 2.
+timeout = 5000
+
+# Another top-level comment line 1.
+# Another top-level comment line 2.
+retries = 3
+"#;
+
+        assert_eq!(filtered, expected);
+    }
+}
+
