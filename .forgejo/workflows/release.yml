@@ -4,14 +4,16 @@
 # A v* tag builds the ratslang CLI and the ratslang-lsp language server for
 # Linux and macOS, attaches them to the Codeberg release of the tag, and
 # publishes them to the steado PPA, the AUR (ratslang and ratslang-bin) and the
-# uos/tools Homebrew tap. PyPI gets them as the ratslang-cli and ratslang-lsp
-# wheels, and cargo binstall downloads the release binaries. The VS Code
-# extension goes to the release, the Visual Studio Marketplace and Open VSX.
+# uos/tools Homebrew tap. The crates go to crates.io, where cargo binstall
+# finds the release binaries. PyPI gets the ratslang-cli and ratslang-lsp
+# wheels. The VS Code extension goes to the release, the Visual Studio
+# Marketplace and Open VSX.
 #
 # Secrets:
 #   PPA_DEPLOY_KEY           SSH key of the ppa user on ppa.steado.tech
 #   AUR_SSH_KEY              SSH key of the AUR account that maintains the packages
 #   HOMEBREW_TAP_DEPLOY_KEY  deploy key with write access to github.com/uos/homebrew-tools
+#   CARGO_REGISTRY_TOKEN     crates.io API token
 #   PYPI_TOKEN               PyPI API token
 #   VSCE_PAT                 Azure DevOps token of the stelzo Marketplace publisher
 #   OVSX_PAT                 Open VSX token of the stelzo namespace
@@ -424,6 +426,20 @@ jobs:
           git commit -m "Update ratslang to ${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}" || echo "No changes"
           git push origin main
           shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+
+  publish-crates:
+    needs:
+      - create-release
+    runs-on: ubuntu-dev-resolute
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash ./scripts/cargo-publish.sh
 
   publish-pypi:
     runs-on: ubuntu-dev-resolute
