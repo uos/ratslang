@@ -7,7 +7,7 @@ repository.workspace = true
 license.workspace = true
 keywords = ["config", "cli", "robotics"]
 categories = ["command-line-utilities", "config"]
-readme = "../README.md"
+readme = "README.md"
 homepage = "https://stelzo.codeberg.page/ratslang/tools/cli/"
 rust-version.workspace = true
 

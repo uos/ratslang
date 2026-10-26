@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "ratslang-cli"
 description = "Check, format, explain and migrate Ratslang configuration files"
-readme = "../README.md"
+readme = "README.md"
 dynamic = ["version"]
 requires-python = ">=3.8"
 license = { text = "MIT OR Apache-2.0" }

@@ -57,9 +57,11 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y ca-certificates curl build-essential git $APT_DEPS
-          # ratslang-lsp needs a newer Rust than the image may ship
-          rustup toolchain install stable --profile minimal
+          rustup self update
+          rustup toolchain uninstall stable
+          rustup toolchain install stable
           rustup default stable
+          rustc --version
           rustup target add "$RUST_TARGET"
 
           cargo build --locked --target "$RUST_TARGET" --profile full-release --package ratslang-cli --package ratslang-lsp
@@ -90,8 +92,11 @@ jobs:
           RUST_TARGET: aarch64-apple-darwin
         run: |
           set -euo pipefail
-          rustup toolchain install stable --profile minimal
+          rustup self update
+          rustup toolchain uninstall stable
+          rustup toolchain install stable
           rustup default stable
+          rustc --version
           rustup target add "$RUST_TARGET"
           cargo build --locked --target "$RUST_TARGET" --profile full-release --package ratslang-cli --package ratslang-lsp
 
@@ -166,8 +171,11 @@ jobs:
             apt-get update -y
             apt-get install -y musl-tools patchelf
           fi
-          rustup toolchain install stable --profile minimal
+          rustup self update
+          rustup toolchain uninstall stable
+          rustup toolchain install stable
           rustup default stable
+          rustc --version
           rustup target add "$TARGET"
 
           ZIG=""
@@ -205,8 +213,11 @@ jobs:
           set -euo pipefail
           apt-get update -y
           apt-get install -y patchelf
-          rustup toolchain install stable --profile minimal
+          rustup self update
+          rustup toolchain uninstall stable
+          rustup toolchain install stable
           rustup default stable
+          rustc --version
           rustup target add "$TARGET"
           for crate in ratslang-cli ratslang-lsp; do
             maturin build --manifest-path "$crate/Cargo.toml" --release --locked --target "$TARGET" --out target/wheels
