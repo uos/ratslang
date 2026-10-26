@@ -24,4 +24,13 @@ jobs:
       - name: Run tests
         run: cargo test
       - name: Verify msrv
-        run: cargo msrv verify
+        run: |
+          set -euo pipefail
+          # Each crate builds with the toolchain its rust-version names, inherited
+          # from the workspace or set in its own manifest.
+          cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json, sys; [print(p["name"], p["rust_version"]) for p in json.load(sys.stdin)["packages"]]' \
+            | while read -r name version; do
+                rustup toolchain install "$version" --profile minimal
+                cargo "+$version" check --locked --all-features --all-targets --package "$name"
+              done

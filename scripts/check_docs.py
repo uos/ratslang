@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -72,13 +73,15 @@ def main():
             f'ratslang = {{ path = {json.dumps(str(ROOT / "ratslang"))}, features = ["serde"] }}\n'
             'serde = { version = "1", features = ["derive"] }\nanyhow = "1"\n'
         )
+        # The workspace lockfile keeps the examples on the versions the crates are tested with.
+        shutil.copy(ROOT / "Cargo.lock", folder / "Cargo.lock")
         for index, (page, source) in enumerate(rust):
             (folder / f"src/bin/example{index}.rs").write_text(
                 f"// {page.relative_to(ROOT)}\n#![allow(unused)]\n"
                 "fn main() -> anyhow::Result<()> {\n"
                 + source + "\nOk(())\n}\n"
             )
-        run(["cargo", "check", "--manifest-path", str(folder / "Cargo.toml"), "--bins", "--quiet", "--offline"],
+        run(["cargo", "check", "--manifest-path", str(folder / "Cargo.toml"), "--bins", "--quiet"],
             env={**os.environ, "CARGO_TARGET_DIR": str(target)})
     print(f"Documentation checked: {len(examples)} pages, {count} Ratslang examples, {len(rust)} Rust examples.")
 
