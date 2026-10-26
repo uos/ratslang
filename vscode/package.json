@@ -1,11 +1,12 @@
 {
   "name": "ratslang",
   "displayName": "Ratslang",
-  "description": "Syntax Highlighting for the Ratslang configuration language",
+  "description": "Syntax highlighting and language server support for Ratslang",
   "version": "0.3.1",
   "engines": {
     "vscode": "^1.105.0"
   },
+  "icon": "assets/ratslang-icon.png",
   "publisher": "stelzo",
   "repository": {
     "type": "git",
@@ -16,16 +17,46 @@
     "Programming Languages"
   ],
   "contributes": {
-    "languages": [{
-      "id": "rl",
-      "aliases": ["Ratslang", "rl"],
-      "extensions": [".rl"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "rl",
-      "scopeName": "source.rl",
-      "path": "./syntaxes/rl.tmLanguage.json"
-    }]
+    "languages": [
+      {
+        "id": "rl",
+        "aliases": [
+          "Ratslang",
+          "rl"
+        ],
+        "extensions": [
+          ".rl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rl",
+        "scopeName": "source.rl",
+        "path": "./syntaxes/rl.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Ratslang",
+      "properties": {
+        "ratslang.serverPath": {
+          "type": "string",
+          "default": "ratslang-lsp",
+          "scope": "machine",
+          "description": "Path to the ratslang-lsp executable. Restart the extension after changing it."
+        }
+      }
+    }
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:rl"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
   }
 }

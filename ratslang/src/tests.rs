@@ -72,7 +72,7 @@ impl Log for TestLogger {
                 .capture_owner
                 .lock()
                 .unwrap()
-                .map_or(false, |owner| owner == std::thread::current().id())
+                .is_some_and(|owner| owner == std::thread::current().id())
             && self.enabled(record.metadata())
         {
             self.records
@@ -319,8 +319,13 @@ fn include() {
         }
         ";
 
-    let eval = compile_code(SRC);
-    assert!(eval.is_ok());
+    // Includes resolve against the including source's directory, so the test
+    // brings its own file instead of depending on where it is run from.
+    let dir = std::env::temp_dir().join(format!("ratslang-include-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.rl"), "test = 4\n").unwrap();
+    let eval = compile_code_with_state(SRC, &dir, None, std::io::sink(), false);
+    std::fs::remove_dir_all(&dir).ok();
     let eval = eval.unwrap();
 
     let res = eval.vars.resolve("test");
@@ -1123,7 +1128,7 @@ fn macro_resolve_bool() -> anyhow::Result<()> {
     };
 
     let enabled: bool = resolve_bool!(configs, "enabled")?;
-    assert_eq!(enabled, true);
+    assert!(enabled);
 
     // Test with false
     let code_false = "disabled = false";
@@ -1134,7 +1139,7 @@ fn macro_resolve_bool() -> anyhow::Result<()> {
     };
 
     let disabled: bool = resolve_bool!(configs, "disabled")?;
-    assert_eq!(disabled, false);
+    assert!(!disabled);
 
     Ok(())
 }
@@ -1257,7 +1262,7 @@ fn macro_fallback_to_defaults() -> anyhow::Result<()> {
 
     // This should come from user config
     let enabled: bool = resolve_bool!(configs, "enabled")?;
-    assert_eq!(enabled, true);
+    assert!(enabled);
 
     // These should come from default config
     let count: i64 = resolve_int!(configs, "count")?;
@@ -1995,4 +2000,40 @@ fn length_unit_conversions() {
     } else {
         panic!("Expected UnitedVal");
     }
+}
+
+#[test]
+fn exponent_notation_reads_as_a_float() {
+    let eval = compile_code(
+        "small = 1.5e-7\nlarge = 2E+6\nbare = 3e2\nnegative = -4.25e-3\n\
+         length = 1.5e-3m\ntime = 2e3ms\nexametre = 1Em\nlist = [1e-3, 2.0]",
+    )
+    .expect("exponents compile");
+    let float = |name: &str| match eval.vars.resolve(name).unwrap().unwrap() {
+        Rhs::Val(Val::NumVal(NumVal::Floating(value))) => value,
+        other => panic!("{name}: expected a float, got {other:?}"),
+    };
+    assert_eq!(float("small"), 1.5e-7);
+    assert_eq!(float("large"), 2e6);
+    assert_eq!(float("bare"), 300.0);
+    assert_eq!(float("negative"), -4.25e-3);
+
+    let united = |name: &str| match eval.vars.resolve(name).unwrap().unwrap() {
+        Rhs::Val(Val::UnitedVal(value)) => value,
+        other => panic!("{name}: expected a value with a unit, got {other:?}"),
+    };
+    let metres = united("length").as_length().unwrap().get::<meter>();
+    assert!((metres - 1.5e-3).abs() < 1e-15, "{metres}");
+    let seconds = united("time").as_time().unwrap().get::<second>();
+    assert!((seconds - 2.0).abs() < 1e-12, "{seconds}");
+    // The `E` of a unit is not an exponent when no digits follow it.
+    let exametres = united("exametre").as_length().unwrap().get::<meter>();
+    assert!((exametres - 1e18).abs() < 1e3, "{exametres}");
+
+    // An integer stays an integer.
+    let integer = compile_code("n = 12").unwrap();
+    assert!(matches!(
+        integer.vars.resolve("n").unwrap().unwrap(),
+        Rhs::Val(Val::NumVal(NumVal::Integer(12)))
+    ));
 }

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pygments-ratslang"
+version = "0.1.0"
+description = "Pygments lexer for Ratslang, driven by the tree-sitter-ratslang grammar and its highlight queries."
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+  "pygments>=2.17",
+  "tree-sitter~=0.26.0",
+  # The grammar the LSP is built against. scripts/check_versions.py keeps the commit in step.
+  "tree-sitter-ratslang @ git+https://codeberg.org/stelzo/tree-sitter-ratslang@6869b2e67f7d9fc4ccc26cdf9782b603eb770216",
+]
+
+[project.entry-points."pygments.lexers"]
+ratslang = "pygments_ratslang:RatslangLexer"
+
+[tool.setuptools]
+py-modules = ["pygments_ratslang"]

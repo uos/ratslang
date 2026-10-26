@@ -1,0 +1,38 @@
+[package]
+name = "ratslang-cli"
+version.workspace = true
+edition.workspace = true
+description = "Check, format, explain and migrate Ratslang configuration files."
+repository.workspace = true
+license.workspace = true
+keywords = ["config", "cli", "robotics"]
+categories = ["command-line-utilities", "config"]
+readme = "../README.md"
+homepage = "https://stelzo.codeberg.page/ratslang/tools/cli/"
+rust-version.workspace = true
+
+[[bin]]
+name = "ratslang"
+path = "src/main.rs"
+
+[package.metadata.binstall]
+pkg-url = "https://codeberg.org/stelzo/ratslang/releases/download/v{ version }/ratslang-{ target }{ binary-ext }"
+pkg-fmt = "bin"
+
+# One package with the CLI and the language server. The release workflow builds
+# ratslang-lsp before packaging.
+[package.metadata.deb]
+name = "ratslang"
+section = "devel"
+priority = "optional"
+extended-description = "The ratslang command checks, formats, explains and migrates Ratslang configuration files. ratslang-lsp is the language server for editors."
+assets = [
+  ["target/release/ratslang", "usr/bin/ratslang", "755"],
+  ["target/release/ratslang-lsp", "usr/bin/ratslang-lsp", "755"],
+  ["../README.md", "usr/share/doc/ratslang/README.md", "644"],
+]
+
+[dependencies]
+ratslang.workspace = true
+anyhow.workspace = true
+clap = { version = "4.6.7", features = ["derive"] }

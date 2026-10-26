@@ -1,0 +1,26 @@
+name: Documentation
+on:
+  pull_request:
+  push:
+    branches: [main, lsp]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  docs:
+    runs-on: ubuntu-dev-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check documentation examples
+        run: python3 scripts/check_docs.py
+      - name: Build documentation
+        run: |
+          cd docs
+          uvx --from zensical==0.0.71 --with ./pygments-ratslang zensical build --clean --strict
+      - name: Deploy to Codeberg Pages
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: https://codeberg.org/git-pages/action@v2
+        with:
+          site: https://${{ forge.repository_owner }}.codeberg.page/ratslang/
+          token: ${{ forge.token }}
+          source: docs/site/

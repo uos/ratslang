@@ -1,23 +1,30 @@
 [package]
 name = "ratslang"
-version = "0.4.3"
-edition = "2024"
-authors = ["stelzo <stelzo@steado.de>"]
+version.workspace = true
+edition.workspace = true
 description = "A minimal and extensible configuration language for fallible humans working with physical systems."
-repository = "https://codeberg.org/stelzo/ratslang"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 keywords = ["config", "lang", "parser", "robotics"]
 categories = ["science::robotics", "parser-implementations"]
-readme = "README.md"
+readme = "../README.md"
 documentation = "https://docs.rs/ratslang"
 homepage = "https://lib.rs/crates/ratslang"
-exclude = [".cargo_vcs_info.json", ".forgejo/*", "vscode/*", "target/*"]
-rust-version = "1.85.1"
+rust-version.workspace = true
 
 [dependencies]
 log = "0.4.34"
 logos = "0.16.1"
-chumsky = { version = "0.13", default-features = false, features = ["std"] }
-ariadne = "0.6"
-anyhow = "1.0"
+chumsky = { version = "0.13.0", default-features = false, features = ["std"] }
+ariadne = "0.6.0"
+anyhow.workspace = true
 uom = "0.38.0"
+serde = { workspace = true, optional = true, features = ["derive"] }
+
+[features]
+default = []
+uom = ["uom/serde"]
+serde = ["dep:serde", "uom"]
+
+[package.metadata.docs.rs]
+all-features = true

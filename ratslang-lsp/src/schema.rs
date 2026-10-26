@@ -1,357 +1,342 @@
-use std::collections::HashMap;
+use crate::{DocumentState, document::comments};
+use ratslang::{Constraints, NumVal, Rhs, UnitVal, Val, ValueType};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::{Path, PathBuf},
+};
+use tower_lsp_server::ls_types::{Location, Uri};
 
 #[derive(Debug, Clone, Default)]
 pub struct Schema {
-    pub properties: HashMap<String, SchemaProperty>,
-    pub namespaces: HashMap<String, SchemaNamespace>,
+    pub properties: BTreeMap<String, SchemaProperty>,
+    pub namespaces: BTreeMap<String, String>,
 }
-
 #[derive(Debug, Clone, Default)]
 pub struct SchemaProperty {
     pub value_type: Option<String>,
     pub description: Option<String>,
     pub default: Option<String>,
     pub recommended: bool,
-    pub options: Vec<String>,
+    pub constraints: Constraints,
+    pub location: Option<Location>,
+    pub value: Option<Rhs>,
+    pub provenance: Option<ratslang::Explanation>,
 }
-
-#[derive(Debug, Clone, Default)]
-pub struct SchemaNamespace {
-    pub description: Option<String>,
-    pub properties: HashMap<String, SchemaProperty>,
-    pub namespaces: HashMap<String, SchemaNamespace>,
+pub fn type_name(ty: &ValueType) -> String {
+    ty.to_string()
 }
-
+pub fn value_type(value: &Rhs) -> String {
+    match value {
+        Rhs::Val(Val::BoolVal(_)) => "boolean".into(),
+        Rhs::Val(Val::StringVal(_)) => "string".into(),
+        Rhs::Val(Val::NumVal(NumVal::Integer(_))) => "integer".into(),
+        Rhs::Val(Val::NumVal(_)) => "float".into(),
+        Rhs::Val(Val::UnitedVal(UnitVal::MassVal(_))) => "mass".into(),
+        Rhs::Val(Val::UnitedVal(UnitVal::LengthVal(_))) => "length".into(),
+        Rhs::Val(Val::UnitedVal(UnitVal::AngleVal(_))) => "angle".into(),
+        Rhs::Val(Val::UnitedVal(UnitVal::FrequencyVal(_))) => "frequency".into(),
+        Rhs::Val(Val::UnitedVal(UnitVal::VelocityVal(_))) => "velocity".into(),
+        Rhs::Val(Val::UnitedVal(UnitVal::AccelerationVal(_))) => "acceleration".into(),
+        Rhs::Val(Val::UnitedVal(UnitVal::TimeVal(_))) => "time".into(),
+        Rhs::Path(_) => "path".into(),
+        Rhs::Array(values) => format!(
+            "array<{}>",
+            values
+                .first()
+                .map(|v| value_type(v))
+                .unwrap_or("unknown".into())
+        ),
+        Rhs::Range { from, to } => format!(
+            "range<{}>",
+            from.as_ref()
+                .or(to.as_ref())
+                .map(|v| value_type(&Rhs::Val(v.clone())))
+                .unwrap_or("unknown".into())
+        ),
+        Rhs::EmptyRange => "range".into(),
+        Rhs::Var(_) => "reference".into(),
+    }
+}
+pub fn inferred_type(value: &Rhs) -> Option<ValueType> {
+    Some(match value {
+        Rhs::Val(Val::BoolVal(_)) => ValueType::Boolean,
+        Rhs::Val(Val::StringVal(_)) => ValueType::String,
+        Rhs::Val(Val::NumVal(_)) => ValueType::Number,
+        Rhs::Val(Val::UnitedVal(UnitVal::MassVal(_))) => ValueType::Mass,
+        Rhs::Val(Val::UnitedVal(UnitVal::LengthVal(_))) => ValueType::Length,
+        Rhs::Val(Val::UnitedVal(UnitVal::AngleVal(_))) => ValueType::Angle,
+        Rhs::Val(Val::UnitedVal(UnitVal::FrequencyVal(_))) => ValueType::Frequency,
+        Rhs::Val(Val::UnitedVal(UnitVal::VelocityVal(_))) => ValueType::Velocity,
+        Rhs::Val(Val::UnitedVal(UnitVal::AccelerationVal(_))) => ValueType::Acceleration,
+        Rhs::Val(Val::UnitedVal(UnitVal::TimeVal(_))) => ValueType::Time,
+        Rhs::Path(_) => ValueType::Path,
+        Rhs::Array(values) => ValueType::Array(Box::new(inferred_type(values.first()?)?)),
+        Rhs::Range { from, to } => {
+            let bound = from.as_ref().or(to.as_ref())?;
+            let inner = match bound {
+                Val::NumVal(NumVal::Integer(_)) => ValueType::Integer,
+                Val::NumVal(NumVal::Floating(_)) => ValueType::Float,
+                _ => inferred_type(&Rhs::Val(bound.clone()))?,
+            };
+            ValueType::Range(Box::new(inner))
+        }
+        _ => return None,
+    })
+}
+impl SchemaProperty {
+    pub fn documentation(&self) -> String {
+        let mut lines = Vec::new();
+        if let Some(description) = &self.description {
+            lines.push(description.clone());
+        }
+        if let Some(ty) = &self.value_type {
+            lines.push(format!("**Type:** `{ty}`"));
+        }
+        if let Some(options) = &self.constraints.allowed {
+            lines.push(format!(
+                "**Allowed:** {}",
+                options
+                    .iter()
+                    .map(|o| format!("`{o}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for (bound, label, exclusive) in [
+            (
+                &self.constraints.minimum,
+                "Minimum",
+                self.constraints.minimum_exclusive,
+            ),
+            (
+                &self.constraints.maximum,
+                "Maximum",
+                self.constraints.maximum_exclusive,
+            ),
+        ] {
+            if let Some(bound) = bound
+                && let Ok(value) = bound.to_source()
+            {
+                lines.push(format!(
+                    "**{label}:** `{value}`{}",
+                    if exclusive { " (exclusive)" } else { "" }
+                ));
+            }
+        }
+        if let Some(default) = &self.default {
+            lines.push(format!("**Default:** `{default}`"));
+        }
+        if self.constraints.required == Some(true) {
+            lines.push("**Required:** explicitly assign this setting in your overrides.".into());
+        }
+        if let Some(message) = &self.constraints.deprecated {
+            lines.push(format!("**Deprecated:** {message}"));
+        }
+        if let Some(target) = &self.constraints.renamed_to {
+            lines.push(format!("**Renamed to:** `{target}`"));
+        }
+        if self.recommended {
+            lines.push("**Recommended**".into());
+        }
+        if let Some(location) = &self.location {
+            lines.push(format!(
+                "**Default source:** [{}:{}]({})",
+                location.uri.as_str(),
+                location.range.start.line + 1,
+                location.uri.as_str()
+            ));
+        }
+        lines.join("\n\n")
+    }
+}
 impl Schema {
     pub fn from_ratslang_source(source: &str) -> Self {
-        let mut schema = Schema::default();
-        let mut current_annotations: Vec<SchemaAnnotation> = Vec::new();
-        let mut namespace_stack: Vec<String> = Vec::new();
-        let mut brace_depth: usize = 0;
-
-        for line in source.lines() {
-            let trimmed = line.trim();
-
-            if trimmed.starts_with('#') {
-                let comment = trimmed.trim_start_matches('#').trim();
-                if let Some(annotation) = SchemaAnnotation::parse(comment) {
-                    current_annotations.push(annotation);
-                }
+        Self::load(source, Path::new("."), None).unwrap_or_default()
+    }
+    pub fn load(source: &str, parent: &Path, uri: Option<&Uri>) -> Result<Self, String> {
+        let uri = uri
+            .cloned()
+            .unwrap_or_else(|| "untitled:schema.rl".parse().unwrap());
+        let doc = DocumentState::new(uri, source.into(), 0);
+        let mut schema = Self::default();
+        schema.collect(&doc, parent, "", &mut HashSet::new(), 0)?;
+        let mut compiled = ratslang::compile_code_with_state(
+            &format!("{source}\n"),
+            parent,
+            None,
+            std::io::sink(),
+            false,
+        )
+        .map_err(|e| e.to_string())?;
+        compiled.vars = compiled.vars.with_drop_warning(false);
+        let constraints = compiled.vars.constraints().map_err(|e| e.to_string())?;
+        for name in compiled.vars.usage_vars().0 {
+            if name.split('.').any(|part| part.starts_with('_')) {
                 continue;
             }
-
-            if trimmed.is_empty() {
-                continue;
+            let prop = schema.properties.entry(name.clone()).or_default();
+            prop.provenance = compiled.vars.explain(&name).map_err(|e| e.to_string())?;
+            if let Some(rules) = constraints.get(&name) {
+                prop.constraints = rules.clone();
             }
-
-            if !current_annotations.is_empty() {
-                if trimmed.ends_with('{') {
-                    let name = trimmed.trim_end_matches('{').trim();
-                    let full_path = if namespace_stack.is_empty() {
-                        name.to_string()
-                    } else {
-                        format!("{}.{}", namespace_stack.join("."), name)
-                    };
-                    schema.apply_annotations_to_namespace(&full_path, &current_annotations);
-                    namespace_stack.push(name.to_string());
-                    brace_depth += 1;
-                } else if let Some(eq_pos) = trimmed.find('=') {
-                    let name = trimmed[..eq_pos].trim();
-                    let full_path = if namespace_stack.is_empty() {
-                        name.to_string()
-                    } else {
-                        format!("{}.{}", namespace_stack.join("."), name)
-                    };
-                    schema.apply_annotations_to_property(&full_path, &current_annotations);
-                }
-                current_annotations.clear();
-            } else if trimmed.ends_with('{') {
-                let name = trimmed.trim_end_matches('{').trim();
-                namespace_stack.push(name.to_string());
-                brace_depth += 1;
-            }
-
-            if trimmed.starts_with('}') {
-                namespace_stack.pop();
-                brace_depth = brace_depth.saturating_sub(1);
+            if let Some(value) = compiled.vars.resolve(&name).map_err(|e| e.to_string())? {
+                prop.value_type = Some(
+                    prop.constraints
+                        .value_type
+                        .as_ref()
+                        .map(type_name)
+                        .unwrap_or_else(|| value_type(&value)),
+                );
+                prop.default = value.to_source().ok();
+                prop.value = Some(value);
             }
         }
-
-        schema
+        Ok(schema)
     }
-
-    fn apply_annotations_to_property(&mut self, path: &str, annotations: &[SchemaAnnotation]) {
-        let parts: Vec<&str> = path.split('.').collect();
-
-        if parts.len() == 1 {
-            let mut prop = SchemaProperty::default();
-            for ann in annotations {
-                match ann {
-                    SchemaAnnotation::Type(t) => prop.value_type = Some(t.clone()),
-                    SchemaAnnotation::Description(d) => prop.description = Some(d.clone()),
-                    SchemaAnnotation::Default(d) => prop.default = Some(d.clone()),
-                    SchemaAnnotation::Recommended => prop.recommended = true,
-                    SchemaAnnotation::Options(opts) => prop.options = opts.clone(),
-                }
-            }
-            self.properties.insert(path.to_string(), prop);
-        } else {
-            let ns_name = parts[0];
-            let rest = parts[1..].join(".");
-            let ns = self.namespaces.entry(ns_name.to_string()).or_default();
-            Self::apply_property_to_namespace(ns, &rest, annotations);
-        }
-    }
-
-    fn apply_property_to_namespace(
-        ns: &mut SchemaNamespace,
-        path: &str,
-        annotations: &[SchemaAnnotation],
-    ) {
-        let parts: Vec<&str> = path.split('.').collect();
-
-        if parts.len() == 1 {
-            let mut prop = SchemaProperty::default();
-            for ann in annotations {
-                match ann {
-                    SchemaAnnotation::Type(t) => prop.value_type = Some(t.clone()),
-                    SchemaAnnotation::Description(d) => prop.description = Some(d.clone()),
-                    SchemaAnnotation::Default(d) => prop.default = Some(d.clone()),
-                    SchemaAnnotation::Recommended => prop.recommended = true,
-                    SchemaAnnotation::Options(opts) => prop.options = opts.clone(),
-                }
-            }
-            ns.properties.insert(path.to_string(), prop);
-        } else {
-            let next_ns = parts[0];
-            let rest = parts[1..].join(".");
-            let inner_ns = ns.namespaces.entry(next_ns.to_string()).or_default();
-            Self::apply_property_to_namespace(inner_ns, &rest, annotations);
-        }
-    }
-
-    fn apply_annotations_to_namespace(&mut self, path: &str, annotations: &[SchemaAnnotation]) {
-        let parts: Vec<&str> = path.split('.').collect();
-
-        if parts.len() == 1 {
-            let ns = self.namespaces.entry(path.to_string()).or_default();
-            for ann in annotations {
-                if let SchemaAnnotation::Description(d) = ann {
-                    ns.description = Some(d.clone());
-                }
-            }
-        } else {
-            let first = parts[0];
-            let rest = parts[1..].join(".");
-            let ns = self.namespaces.entry(first.to_string()).or_default();
-            Self::apply_namespace_recursive(ns, &rest, annotations);
-        }
-    }
-
-    fn apply_namespace_recursive(
-        ns: &mut SchemaNamespace,
-        path: &str,
-        annotations: &[SchemaAnnotation],
-    ) {
-        let parts: Vec<&str> = path.split('.').collect();
-
-        if parts.len() == 1 {
-            let inner_ns = ns.namespaces.entry(path.to_string()).or_default();
-            for ann in annotations {
-                if let SchemaAnnotation::Description(d) = ann {
-                    inner_ns.description = Some(d.clone());
-                }
-            }
-        } else {
-            let first = parts[0];
-            let rest = parts[1..].join(".");
-            let inner_ns = ns.namespaces.entry(first.to_string()).or_default();
-            Self::apply_namespace_recursive(inner_ns, &rest, annotations);
-        }
-    }
-
-    pub fn get_property(&self, path: &str) -> Option<&SchemaProperty> {
-        let parts: Vec<&str> = path.split('.').collect();
-        self.get_property_recursive(&parts, &self.properties, &self.namespaces)
-    }
-
-    fn get_property_recursive<'a>(
-        &'a self,
-        parts: &[&str],
-        props: &'a HashMap<String, SchemaProperty>,
-        nss: &'a HashMap<String, SchemaNamespace>,
-    ) -> Option<&'a SchemaProperty> {
-        if parts.is_empty() {
-            return None;
-        }
-
-        if parts.len() == 1 {
-            return props.get(parts[0]);
-        }
-
-        if let Some(ns) = nss.get(parts[0]) {
-            self.get_property_recursive(&parts[1..], &ns.properties, &ns.namespaces)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_children_at_path(&self, path: &str) -> (Vec<&str>, Vec<&str>) {
-        let parts: Vec<&str> = if path.is_empty() {
-            Vec::new()
-        } else {
-            path.split('.').collect()
-        };
-        self.get_children_recursive(&parts, &self.properties, &self.namespaces)
-    }
-
-    fn get_children_recursive<'a>(
-        &'a self,
-        parts: &[&str],
-        props: &'a HashMap<String, SchemaProperty>,
-        nss: &'a HashMap<String, SchemaNamespace>,
-    ) -> (Vec<&'a str>, Vec<&'a str>) {
-        if parts.is_empty() {
-            return (
-                props.keys().map(|s| s.as_str()).collect(),
-                nss.keys().map(|s| s.as_str()).collect(),
-            );
-        }
-
-        if let Some(ns) = nss.get(parts[0]) {
-            self.get_children_recursive(&parts[1..], &ns.properties, &ns.namespaces)
-        } else {
-            (Vec::new(), Vec::new())
-        }
-    }
-
-    pub fn get_recommended_properties(&self) -> Vec<(String, String)> {
-        let mut result = Vec::new();
-        self.collect_recommended_recursive(&self.properties, &self.namespaces, "", &mut result);
-        result
-    }
-
-    fn collect_recommended_recursive(
-        &self,
-        props: &HashMap<String, SchemaProperty>,
-        nss: &HashMap<String, SchemaNamespace>,
+    fn collect(
+        &mut self,
+        doc: &DocumentState,
+        parent: &Path,
         prefix: &str,
-        result: &mut Vec<(String, String)>,
-    ) {
-        for (name, prop) in props {
-            if prop.recommended {
-                let full_path = if prefix.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}.{}", prefix, name)
-                };
-                let default = prop.default.clone().unwrap_or_default();
-                result.push((full_path, default));
+        active: &mut HashSet<PathBuf>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth >= 64 {
+            return Err("include nesting exceeds 64 files".into());
+        }
+        let full = |name: &str| {
+            if prefix.is_empty() {
+                name.into()
+            } else {
+                format!("{prefix}.{name}")
+            }
+        };
+        for (name, ns) in &doc.symbols.namespaces {
+            self.namespaces.insert(full(name), ns.documentation.clone());
+        }
+        let mut statements: Vec<_> = doc
+            .symbols
+            .assignments
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a.range.start, false, i))
+            .chain(
+                doc.symbols
+                    .includes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| (a.range.start, true, i)),
+            )
+            .collect();
+        statements.sort_by_key(|s| s.0);
+        for (_, is_include, index) in statements {
+            if is_include {
+                let include = &doc.symbols.includes[index];
+                let path = parent
+                    .join(&include.path)
+                    .canonicalize()
+                    .map_err(|e| format!("include {}: {e}", include.path))?;
+                if !active.insert(path.clone()) {
+                    return Err(format!("cyclic include: {}", path.display()));
+                }
+                let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                let uri = Uri::from_file_path(&path).ok_or("invalid include URI")?;
+                let included = DocumentState::new(uri, source, 0);
+                self.collect(
+                    &included,
+                    path.parent().unwrap_or(parent),
+                    full(&include.namespace).trim_end_matches('.'),
+                    active,
+                    depth + 1,
+                )?;
+                active.remove(&path);
+            } else {
+                let assignment = &doc.symbols.assignments[index];
+                if assignment.is_internal {
+                    continue;
+                }
+                let prop = self
+                    .properties
+                    .entry(full(&assignment.full_path))
+                    .or_default();
+                if !assignment.documentation.is_empty() {
+                    prop.description = Some(assignment.documentation.clone());
+                }
+                prop.recommended |= assignment.annotations.iter().any(|a| a == "recommended")
+                    || doc.symbols.namespaces.iter().any(|(name, ns)| {
+                        ns.recommended && assignment.full_path.starts_with(&format!("{name}."))
+                    });
+                prop.location = Some(Location::new(doc.uri.clone(), assignment.selection_range));
+                prop.default = Some(assignment.expression.clone());
+                prop.constraints = prop.constraints.overlay(
+                    &Constraints::from_annotations(
+                        assignment.annotations.iter().map(String::as_str),
+                    )
+                    .map_err(|e| format!("{}: {e}", assignment.full_path))?,
+                );
             }
         }
-
-        for (name, ns) in nss {
-            let new_prefix = if prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{}", prefix, name)
-            };
-            self.collect_recommended_recursive(&ns.properties, &ns.namespaces, &new_prefix, result);
-        }
+        Ok(())
     }
-}
-
-#[derive(Debug, Clone)]
-enum SchemaAnnotation {
-    Type(String),
-    Description(String),
-    Default(String),
-    Recommended,
-    Options(Vec<String>),
-}
-
-impl SchemaAnnotation {
-    fn parse(comment: &str) -> Option<Self> {
-        if !comment.starts_with('@') {
-            return None;
-        }
-
-        let content = comment[1..].trim();
-
-        if content == "recommended" {
-            return Some(SchemaAnnotation::Recommended);
-        }
-
-        if let Some(eq_pos) = content.find('=') {
-            let key = content[..eq_pos].trim();
-            let value = content[eq_pos + 1..].trim().trim_matches('"');
-
-            return match key {
-                "type" => Some(SchemaAnnotation::Type(value.to_string())),
-                "description" => Some(SchemaAnnotation::Description(value.to_string())),
-                "default" => Some(SchemaAnnotation::Default(value.to_string())),
-                "options" => {
-                    let opts: Vec<String> = value
-                        .trim_matches(|c| c == '[' || c == ']')
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').to_string())
-                        .collect();
-                    Some(SchemaAnnotation::Options(opts))
+    /// Suggest only a unique nearby schema key; unrelated and ambiguous names stay unknown.
+    pub fn suggest_setting(&self, name: &str) -> Option<&str> {
+        ratslang::tooling::suggest_setting(name, self.properties.keys().map(String::as_str))
+    }
+    pub fn get_property(&self, path: &str) -> Option<&SchemaProperty> {
+        self.properties.get(path)
+    }
+    pub fn get_children_at_path(&self, path: &str) -> (Vec<String>, Vec<String>) {
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{path}.")
+        };
+        let mut props = std::collections::BTreeSet::new();
+        let mut namespaces = std::collections::BTreeSet::new();
+        for name in self.properties.keys().chain(self.namespaces.keys()) {
+            if let Some(rest) = name.strip_prefix(&prefix) {
+                if let Some((first, _)) = rest.split_once('.') {
+                    namespaces.insert(first.to_owned());
+                } else if self.properties.contains_key(name) {
+                    props.insert(rest.to_owned());
+                } else if !rest.is_empty() {
+                    namespaces.insert(rest.to_owned());
                 }
-                _ => None,
-            };
+            }
         }
-
-        None
+        (
+            props.into_iter().collect(),
+            namespaces.into_iter().collect(),
+        )
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_schema_from_source() {
-        let source = r#"
-# @type = string
-# @description = "ROS topic for the lidar"
-# @default = "/ouster/points"
-topic = "/ouster/points"
-
-# @recommended
-# @type = number
-resolution = 50
-
-sensor {
-    # @type = length
-    range = 100m
-}
-"#;
-        let schema = Schema::from_ratslang_source(source);
-
-        assert!(schema.properties.contains_key("topic"));
-        let topic = schema.properties.get("topic").unwrap();
-        assert_eq!(topic.value_type, Some("string".to_string()));
-        assert_eq!(
-            topic.description,
-            Some("ROS topic for the lidar".to_string())
-        );
-
-        assert!(schema.namespaces.contains_key("sensor"));
+    pub fn get_recommended_properties(&self) -> Vec<(String, String)> {
+        self.properties
+            .iter()
+            .filter(|(_, p)| p.recommended || p.constraints.required == Some(true))
+            .filter_map(|(name, p)| p.default.as_ref().map(|v| (name.clone(), v.clone())))
+            .collect()
     }
-
-    #[test]
-    fn test_get_property_at_path() {
-        let source = r#"
-sensor {
-    # @type = length
-    range = 100m
-}
-"#;
-        let schema = Schema::from_ratslang_source(source);
-
-        let prop = schema.get_property("sensor.range");
-        assert!(prop.is_some(), "Expected to find sensor.range property");
-        assert_eq!(prop.unwrap().value_type, Some("length".to_string()));
+    pub fn local_property(doc: &DocumentState, name: &str) -> Option<SchemaProperty> {
+        let assignment = doc
+            .symbols
+            .assignments
+            .iter()
+            .rev()
+            .find(|a| a.full_path == name)?;
+        Some(SchemaProperty {
+            constraints: Constraints::from_annotations(
+                assignment.annotations.iter().map(String::as_str),
+            )
+            .ok()?,
+            description: Some(assignment.documentation.clone()),
+            default: Some(assignment.expression.clone()),
+            location: Some(Location::new(doc.uri.clone(), assignment.selection_range)),
+            ..Default::default()
+        })
+    }
+    pub fn incomplete_annotations(doc: &DocumentState, byte: usize) -> Constraints {
+        let start = doc.content[..byte].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let (annotations, _) = comments(&doc.content, start);
+        Constraints::from_annotations(annotations.iter().map(String::as_str)).unwrap_or_default()
     }
 }

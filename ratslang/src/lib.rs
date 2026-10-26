@@ -66,6 +66,31 @@
 //!
 //! > **Note:** Ratslang is deliberately simple—no arithmetic, loops, or conditionals.
 //!
+//! ## Serde
+//!
+//! Enable `features = ["serde"]` for `ratslang::from_str` and `ratslang::to_string`.
+//! This also enables the `uom` integration feature. Mark typed quantity fields with
+//! `#[serde(with = "ratslang::serde::length")]` or `ratslang::serde::time` to preserve
+//! dimensions and emit readable units such as `1um` and `250ms`. See the `serde`
+//! module for a complete example and supported data types.
+//! `serde::Quantity<Length>` and `serde::Quantity<Time>` work in arrays,
+//! vectors, matrices, optional fields, and ranges without per-field adapters.
+//! Use `serde::case_insensitive` for derived unit enums and their Serde aliases.
+//! Use `ratslang::serde::Document<T>` to preserve source comments and annotations
+//! when round-tripping a configuration through serde.
+//! If the configuration is already compiled, use `ratslang::from_evaluated`
+//! to deserialize it directly, retaining its include resolution and usage tracking.
+//!
+//! ## Type and value constraints
+//!
+//! Comments directly above assignments can declare `# @enum CPU, Backend`,
+//! `# @type integer`, `# @min 0`, and `# @max 64`. Enum choices match strings,
+//! identifiers, or paths exactly. Bounds are inclusive; physical quantities
+//! compare across units, so `# @min 1mm` accepts `50cm`.
+//! The compiler validates final values after includes, references, and overrides.
+//! Serde also applies default configuration constraints to user overrides.
+//! See [`constraints`] for examples and the supported type declarations.
+//!
 //! ## Syntax Highlighting
 //!
 //! Syntax highlighting is available with [this tree-sitter grammar](https://codeberg.org/stelzo/tree-sitter-ratslang) or [this VS Code extension](https://marketplace.visualstudio.com/items?itemName=stelzo.ratslang).
@@ -94,7 +119,7 @@
 //!
 //! ### Usage
 //!
-//! Extract annotated configuration (see also: [crate::VariableHistory::to_string_filtered]):
+//! Extract annotated configuration (see also: [`Evaluated::to_string_filtered`]):
 //!
 //! ```no_run
 //! use ratslang::compile_code;
@@ -139,7 +164,7 @@
 //!
 //! ### Astronomical and Special Units
 //!
-//! - `a` – year (365.25 days, Julian year)
+//! - `a` – year (365 days, matching `uom`)
 //! - `shake` – 10 nanoseconds (unit used in nuclear physics)
 //! - `sidereal_year` – sidereal year (365.256363004 days)
 //! - `tropical_year` – tropical year (365.242190402 days)
@@ -187,6 +212,45 @@
 //! - Mixed units in expressions are not supported; each value must use consistent units
 
 use core::fmt;
+pub mod constraints;
+pub mod tooling;
+
+/// Where the calling crate's release publishes its defaults schema:
+/// `<repository>/releases/download/v<version>/default.rl`, from the crate's
+/// own `repository` and `version` in Cargo.toml, so every binary names the
+/// schema of exactly its release. The release has to attach the defaults
+/// file under that name; pass another asset name as the argument.
+///
+/// ```
+/// let url = ratslang::release_schema_url!();
+/// assert!(url.ends_with(&format!("/releases/download/v{}/default.rl", env!("CARGO_PKG_VERSION"))));
+/// ```
+#[macro_export]
+macro_rules! release_schema_url {
+    () => {
+        $crate::release_schema_url!("default.rl")
+    };
+    ($asset:literal) => {
+        concat!(
+            env!("CARGO_PKG_REPOSITORY"),
+            "/releases/download/v",
+            env!("CARGO_PKG_VERSION"),
+            "/",
+            $asset
+        )
+    };
+}
+pub use constraints::{Constraints, ValueType};
+mod finite;
+mod format;
+mod physical;
+mod provenance;
+pub use format::FormatError;
+pub use provenance::{Definition, Explanation, SourceLocation};
+#[cfg(feature = "serde")]
+pub mod serde;
+#[cfg(feature = "serde")]
+pub use crate::serde::{from_evaluated, from_str, to_ast, to_string};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -206,7 +270,7 @@ use chumsky::{
 
 // Re-export uom types for users
 pub use uom;
-pub use uom::si::f64::{Length, Time};
+pub use uom::si::f64::{Acceleration, Angle, Frequency, Length, Mass, Time, Velocity};
 pub use uom::si::length::{
     angstrom, astronomical_unit, attometer, bohr_radius, centimeter, chain, decameter, decimeter,
     exameter, fathom, femtometer, fermi, foot, gigameter, hectometer, inch, kilometer, light_year,
@@ -214,17 +278,34 @@ pub use uom::si::length::{
     nautical_mile, parsec, petameter, picometer, rod, terameter, yard, yoctometer, yottameter,
     zeptometer, zettameter,
 };
+pub use uom::si::mass::{gram, kilogram, microgram, milligram, nanogram, ounce, pound};
 pub use uom::si::time::{
     attosecond, centisecond, day, day_sidereal, decasecond, decisecond, exasecond, femtosecond,
     gigasecond, hectosecond, hour, hour_sidereal, kilosecond, megasecond, microsecond, millisecond,
     minute, nanosecond, petasecond, picosecond, second, second_sidereal, shake, terasecond, year,
     year_sidereal, year_tropical, yoctosecond, yottasecond, zeptosecond, zettasecond,
 };
+pub use uom::si::{
+    acceleration::meter_per_second_squared,
+    angle::{degree, radian},
+    frequency::hertz,
+    velocity::meter_per_second,
+};
 
 fn split_num_unit(slice: &str) -> Option<(f64, &str)> {
-    let idx = slice
+    let mut idx = slice
         .find(|c: char| c.is_alphabetic() || c == 'µ')
         .unwrap_or(slice.len());
+    // An exponent is part of the number: `1.5e-3m` is 1.5e-3 metres. It needs
+    // digits after the `e`, so the `E` of a unit such as `Em` is left alone.
+    if let Some(exponent) = slice[idx..].strip_prefix(['e', 'E']) {
+        let digits = exponent.trim_start_matches(['+', '-']);
+        let rest = digits.trim_start_matches(|c: char| c.is_ascii_digit());
+        let count = digits.len() - rest.len();
+        if count > 0 {
+            idx = slice.len() - digits.len() + count;
+        }
+    }
     if idx == 0 || idx == slice.len() {
         return None;
     }
@@ -395,14 +476,17 @@ enum Token<'a> {
     False,
 
     // Length tokens - support all SI prefixes
-    #[regex(r"[+-]?(?:\d+\.\d+|\d+)(?:astronomical_units?|nautical_miles?|light_years?|microinches?|bohr_radiuses?|ångströms?|astronomical_unit|nautical_mile|light_year|microinch|bohr_radius|ångström|angstroms?|angstrom|feet|inches|yards|miles|chains|rods|fathoms?|fermis?|fermi|microns?|micron|mils?|ym|zm|am|fm|pm|nm|um|µm|mm|cm|dm|dam|hm|km|Mm|Gm|Tm|Pm|Em|Zm|Ym|ft|in|mi|yd|ch|rd|ua|au|pc|l\.y\.|Å|µ|μm|m)", parse_length_prefixed, priority = 3)]
-    LengthToken(Length),
+    #[regex(r"[+-]?(?:\d+\.\d+|\d+)(?:[eE][+-]?\d+)?(?:astronomical_units?|nautical_miles?|light_years?|microinches?|bohr_radiuses?|ångströms?|astronomical_unit|nautical_mile|light_year|microinch|bohr_radius|ångström|angstroms?|angstrom|feet|inches|yards|miles|chains|rods|fathoms?|fermis?|fermi|microns?|micron|mils?|ym|zm|am|fm|pm|nm|um|µm|mm|cm|dm|dam|hm|km|Mm|Gm|Tm|Pm|Em|Zm|Ym|ft|in|mi|yd|ch|rd|ua|au|pc|l\.y\.|Å|µ|μm|m)", parse_length_prefixed, priority = 3)]
+    Length(Length),
 
     // Time tokens - support all SI prefixes on seconds plus minute/hour/day/year/shake
-    #[regex(r"[+-]?(?:\d+\.\d+|\d+)(?:shakes?|years?|minutes?|hours?|days?|seconds?_sidereal|days?_sidereal|hours?_sidereal|years?_sidereal|years?_tropical|ys|zs|as|fs|ps|ns|us|µs|ms|cs|ds|s|das|hs|ks|Ms|Gs|Ts|Ps|Es|Zs|Ys|min|h|d|a)", parse_time_prefixed, priority = 3)]
-    TimeToken(Time),
+    #[regex(r"[+-]?(?:\d+\.\d+|\d+)(?:[eE][+-]?\d+)?(?:shakes?|years?|minutes?|hours?|days?|seconds?_sidereal|days?_sidereal|hours?_sidereal|years?_sidereal|years?_tropical|ys|zs|as|fs|ps|ns|us|µs|ms|cs|ds|s|das|hs|ks|Ms|Gs|Ts|Ps|Es|Zs|Ys|min|h|d|a)", parse_time_prefixed, priority = 3)]
+    Time(Time),
 
-    #[regex(r"[+-]?\d+\.\d+", |lex| lex.slice().parse().ok())]
+    #[regex(r"[+-]?(?:\d+\.\d+|\d+)(?:[eE][+-]?\d+)?(?:milligrams?|micrograms?|nanograms?|kilograms?|grams?|tonnes?|metric_ton|pounds?|ounces?|lb|oz|yg|zg|ag|fg|pg|ng|ug|µg|μg|mg|cg|dg|dag|hg|kg|Mg|Gg|Tg|Pg|Eg|Zg|Yg|g|t|deg|rad|mrad|urad|µrad|mHz|Hz|kHz|MHz|GHz|m/s2|m/s\^2|cm/s2|cm/s\^2|mm/s2|mm/s\^2|m/s|cm/s|mm/s|km/h)", physical::parse, priority = 4)]
+    Physical(UnitVal),
+
+    #[regex(r"[+-]?(?:\d+\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)", |lex| lex.slice().parse().ok())]
     FloatingNumber(f64),
 
     #[regex(r"[+-]?\d+", |lex| lex.slice().parse().ok())]
@@ -424,8 +508,8 @@ impl fmt::Display for Token<'_> {
             Self::NewLine => write!(f, "\\n"),
             Self::BracketOpen => write!(f, "["),
             Self::BracketClose => write!(f, "]"),
-            Self::BlockStart => write!(f, "{}", "{"),
-            Self::BlockEnd => write!(f, "{}", "}"),
+            Self::BlockStart => write!(f, "{{"),
+            Self::BlockEnd => write!(f, "}}"),
             Self::LBracket => write!(f, "("),
             Self::RBracket => write!(f, ")"),
             Self::OpAssignToLeft => write!(f, "<-"),
@@ -436,8 +520,9 @@ impl fmt::Display for Token<'_> {
             Self::False => write!(f, "false"),
             Self::IntegerNumber(s) => write!(f, "{}", s),
             Self::FloatingNumber(s) => write!(f, "{}", s),
-            Self::LengthToken(l) => write!(f, "{}m", l.get::<meter>()),
-            Self::TimeToken(t) => write!(f, "{}s", t.get::<second>()),
+            Self::Length(l) => write!(f, "{}m", l.get::<meter>()),
+            Self::Physical(v) => write!(f, "{}", v.to_source().map_err(|_| fmt::Error)?),
+            Self::Time(t) => write!(f, "{}s", t.get::<second>()),
             Self::Identifier(s) => write!(f, "{}", s),
             Self::Dot => write!(f, "."),
         }
@@ -493,10 +578,15 @@ impl NumVal {
 
 /// Physical unit types supported by the language.
 ///
-/// This enum distinguishes between different physical dimensions (length vs time)
+/// This enum distinguishes between supported physical dimensions
 /// while the actual values are stored with full precision using the `uom` crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unit {
+    Mass,
+    Angle,
+    Frequency,
+    Velocity,
+    Acceleration,
     /// Time unit (stored internally using uom's Time type in seconds)
     Time,
     /// Length/distance unit (stored internally using uom's Length type in meters)
@@ -505,10 +595,15 @@ pub enum Unit {
 
 /// A physical quantity with its unit, using the `uom` crate for type-safe dimensional analysis.
 ///
-/// Values are stored directly as `uom` types (`Length` or `Time`) preserving full type safety
+/// Values are stored directly as typed `uom` quantities preserving full type safety
 /// and precision. No conversion or reconstruction is needed when accessing values.
 #[derive(Debug, Clone, Copy)]
 pub enum UnitVal {
+    MassVal(Mass),
+    AngleVal(Angle),
+    FrequencyVal(Frequency),
+    VelocityVal(Velocity),
+    AccelerationVal(Acceleration),
     /// A length/distance value stored as uom::si::f64::Length
     LengthVal(Length),
     /// A time/duration value stored as uom::si::f64::Time  
@@ -530,25 +625,30 @@ impl UnitVal {
     pub fn unit(&self) -> Unit {
         match self {
             Self::LengthVal(_) => Unit::Length,
+            Self::MassVal(_) => Unit::Mass,
             Self::TimeVal(_) => Unit::Time,
+            Self::AngleVal(_) => Unit::Angle,
+            Self::FrequencyVal(_) => Unit::Frequency,
+            Self::VelocityVal(_) => Unit::Velocity,
+            Self::AccelerationVal(_) => Unit::Acceleration,
         }
     }
 
     /// Returns the value as a `uom::si::f64::Length` if this is a length unit.
-    /// Returns None if this is a time unit.
+    /// Returns None for other dimensions.
     pub fn as_length(&self) -> Option<Length> {
         match self {
             Self::LengthVal(l) => Some(*l),
-            Self::TimeVal(_) => None,
+            _ => None,
         }
     }
 
     /// Returns the value as a `uom::si::f64::Time` if this is a time unit.
-    /// Returns None if this is a length unit.
+    /// Returns None for other dimensions.
     pub fn as_time(&self) -> Option<Time> {
         match self {
             Self::TimeVal(t) => Some(*t),
-            Self::LengthVal(_) => None,
+            _ => None,
         }
     }
 }
@@ -569,6 +669,10 @@ impl PartialEq for UnitVal {
                 let v1 = t1.get::<nanosecond>();
                 let v2 = t2.get::<nanosecond>();
                 (v1 - v2).abs() < tolerance.max(v1.abs() * tolerance)
+            }
+            (a, b) if a.unit() == b.unit() => {
+                let (a, b) = (a.si_value(), b.si_value());
+                (a - b).abs() <= 1e-12_f64.max(a.abs().max(b.abs()) * 1e-12)
             }
             _ => false, // Different unit types are never equal
         }
@@ -632,7 +736,7 @@ fn vec_prepend<T: Clone>(prepend: &[T], source: &[T]) -> Vec<T> {
 
 impl Var {
     /// Prepends a namespace path to this variable's existing namespace.
-    pub fn add_namespace(self, ns: &Vec<String>) -> Self {
+    pub fn add_namespace(self, ns: &[String]) -> Self {
         match self {
             Var::User { name, namespace } => Var::User {
                 name,
@@ -712,6 +816,12 @@ pub struct Evaluated {
     pub source_text: String,
     /// Maps annotation names to line ranges (0-indexed, inclusive)
     pub annotations: HashMap<String, Vec<(usize, usize)>>,
+}
+
+impl Default for Evaluated {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Evaluated {
@@ -872,7 +982,6 @@ impl Evaluated {
                         let (child_name, child_node) = node.children.iter().next().unwrap();
                         let new_path = format!("{}.{}", path, child_name);
                         render_collapsible_dotted(child_node, &new_path, depth, out);
-                        return;
                     }
                 }
 
@@ -998,20 +1107,29 @@ pub enum StatementKindOwned {
 fn do_pass1(
     pass1: Vec<StatementKindOwnedPass1>,
     current_parent: &std::path::Path,
-) -> anyhow::Result<Vec<StatementKindOwned>> {
+    spans: &mut impl Iterator<Item = std::ops::Range<usize>>,
+    context: &provenance::Context<'_>,
+) -> anyhow::Result<provenance::Parsed> {
     let mut out = vec![];
+    let mut locations = vec![];
 
     for stmt in pass1 {
         match stmt {
             StatementKindOwnedPass1::VariableDef(statement) => {
+                let span = spans
+                    .next()
+                    .ok_or_else(|| anyhow!("missing assignment location"))?;
+                locations.push((context.location(span), context.included_from.clone()));
                 out.push(StatementKindOwned::VariableDef(statement));
             }
             StatementKindOwnedPass1::VariableNamespaceBlock { ns, stmts } => {
                 let v = stmts.into_iter().map(|f| *f).collect::<Vec<_>>();
 
-                let passed = do_pass1(v, current_parent)?;
+                let passed = do_pass1(v, current_parent, spans, context)?;
+                locations.extend(passed.locations);
                 out.extend(
                     passed
+                        .ast
                         .into_iter()
                         .map(|t| match t {
                             StatementKindOwned::VariableDef(statement) => Ok(
@@ -1041,17 +1159,32 @@ fn do_pass1(
                 } else {
                     to_parse
                 };
-                let nast = parse_to_ast(&to_parse)?;
-                let nast = ast_add_namespace(&namespace, nast);
-                out.extend(nast);
+                let span = spans
+                    .next()
+                    .ok_or_else(|| anyhow!("missing include location"))?;
+                let mut included_from = context.included_from.clone();
+                included_from.push(context.location(span));
+                anyhow::ensure!(
+                    included_from.len() <= 64,
+                    "include nesting exceeds 64 files"
+                );
+                let nast = parse_to_ast(&to_parse, included_from)?;
+                locations.extend(nast.locations);
+                out.extend(ast_add_namespace(&namespace, nast.ast));
             }
         }
     }
 
-    Ok(out)
+    Ok(provenance::Parsed {
+        ast: out,
+        locations,
+    })
 }
 
-fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned>> {
+fn parse_to_ast(
+    path: &std::path::Path,
+    included_from: Vec<SourceLocation>,
+) -> anyhow::Result<provenance::Parsed> {
     let file = std::fs::read_to_string(path);
     let file = match file {
         Ok(file) => Ok(file),
@@ -1067,6 +1200,12 @@ fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned
         },
     }?;
 
+    let file = if file.ends_with('\n') {
+        file
+    } else {
+        file + "\n"
+    };
+
     // parse file to be included recursively
     let token_iter = Token::lexer(&file).spanned().map(|(tok, span)| match tok {
         Ok(tok) => (tok, span.into()),
@@ -1074,7 +1213,11 @@ fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned
     });
     let token_stream =
         Stream::from_iter(token_iter).map((0..file.len()).into(), |(t, s): (_, _)| (t, s));
-    match parser().parse(token_stream).into_result() {
+    let locations: provenance::Locations = Default::default();
+    match parser_with_locations(&file, Some(locations.clone()))
+        .parse(token_stream)
+        .into_result()
+    {
         Ok(sexpr) => {
             let mut ast: Vec<StatementKindOwnedPass1> = Vec::new();
             for expr in sexpr {
@@ -1085,6 +1228,14 @@ fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned
                 ast,
                 path.parent()
                     .ok_or(anyhow!("Can not get parent directory of file."))?,
+                &mut locations.borrow().values().cloned(),
+                &provenance::Context {
+                    source: &file,
+                    file: Some(path.to_path_buf()),
+                    byte_offset: 0,
+                    line_offset: 0,
+                    included_from,
+                },
             )?; // recursive call
             return Ok(ast);
         }
@@ -1105,15 +1256,15 @@ fn parse_to_ast(path: &std::path::Path) -> anyhow::Result<Vec<StatementKindOwned
         }
     }
 
-    return Err(anyhow!("Could not parse ratslang code."));
+    Err(anyhow!("Could not parse ratslang code."))
 }
 
-impl<'a> From<StatementKindPass1> for StatementKindOwnedPass1 {
+impl From<StatementKindPass1> for StatementKindOwnedPass1 {
     fn from(value: StatementKindPass1) -> Self {
         match value {
             StatementKindPass1::VariableNamespaceBlock { ns, stmts } => {
                 StatementKindOwnedPass1::VariableNamespaceBlock {
-                    ns: ns.into_iter().map(String::from).collect::<Vec<_>>(),
+                    ns: ns.into_iter().collect::<Vec<_>>(),
                     stmts: stmts
                         .into_iter()
                         .map(|bstmt| Box::new(StatementKindOwnedPass1::from(*bstmt)))
@@ -1161,7 +1312,7 @@ pub enum Statement {
 }
 
 impl Statement {
-    fn add_namespace(self, ns: &Vec<String>) -> Self {
+    fn add_namespace(self, ns: &[String]) -> Self {
         match self {
             Statement::AssignLeft {
                 lhs,
@@ -1170,7 +1321,7 @@ impl Statement {
             } => {
                 let nlhs = lhs
                     .into_iter()
-                    .map(|v| v.add_namespace(&ns))
+                    .map(|v| v.add_namespace(ns))
                     .collect::<Vec<_>>();
                 Statement::AssignLeft {
                     lhs: nlhs,
@@ -1183,7 +1334,7 @@ impl Statement {
 }
 
 #[allow(unreachable_patterns)] // remove when adding more statments than just variables
-fn ast_add_namespace(ns: &Vec<String>, ast: Vec<StatementKindOwned>) -> Vec<StatementKindOwned> {
+fn ast_add_namespace(ns: &[String], ast: Vec<StatementKindOwned>) -> Vec<StatementKindOwned> {
     ast.into_iter()
         .map(|stmt| match stmt {
             StatementKindOwned::VariableDef(statement) => {
@@ -1199,7 +1350,18 @@ pub enum Operator {
     Left, // "="
 }
 
-fn parser<'a, I>() -> impl Parser<'a, I, Vec<StatementKindPass1>, extra::Err<Rich<'a, Token<'a>>>>
+fn parser<'a, I>(
+    source: &'a str,
+) -> impl Parser<'a, I, Vec<StatementKindPass1>, extra::Err<Rich<'a, Token<'a>>>>
+where
+    I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
+{
+    parser_with_locations(source, None)
+}
+fn parser_with_locations<'a, I>(
+    source: &'a str,
+    locations: Option<provenance::Locations>,
+) -> impl Parser<'a, I, Vec<StatementKindPass1>, extra::Err<Rich<'a, Token<'a>>>>
 where
     I: ValueInput<'a, Token = Token<'a>, Span = SimpleSpan>,
 {
@@ -1210,14 +1372,15 @@ where
     let rhs = recursive(|rhs| {
         let val = {
             // Time values: directly from uom Time token
+            let physical = select! { Token::Physical(value) => Val::UnitedVal(value) };
             let time = select! {
-                Token::TimeToken(t) => t,
+                Token::Time(t) => t,
             }
             .map(|t| Val::UnitedVal(UnitVal::from_time(t)));
 
             // Length values: directly from uom Length token
             let way = select! {
-                Token::LengthToken(l) => l,
+                Token::Length(l) => l,
             }
             .map(|l| Val::UnitedVal(UnitVal::from_length(l)));
 
@@ -1227,13 +1390,17 @@ where
             }
             .map(Val::NumVal);
 
-            choice((time, way, number))
+            choice((time, way, number, physical)).try_map(|value, span| {
+                value
+                    .validate_finite()
+                    .map_err(|error| Rich::custom(span, error.to_string()))?;
+                Ok(value)
+            })
         };
 
         let bounded_range = val
-            .clone()
             .then_ignore(just(Token::OpRange))
-            .then(val.clone())
+            .then(val)
             .try_map(|(from, to), span| {
                 if let (Val::NumVal(from_n), Val::NumVal(to_n)) = (&from, &to) {
                     if std::mem::discriminant(from_n) != std::mem::discriminant(to_n) {
@@ -1250,7 +1417,7 @@ where
             });
 
         let lower_bounded_range =
-            val.clone()
+            val
                 .then_ignore(just(Token::OpRange))
                 .map(|from| Rhs::Range {
                     from: Some(from),
@@ -1259,7 +1426,7 @@ where
 
         let upper_bounded_range =
             just(Token::OpRange)
-                .ignore_then(val.clone())
+                .ignore_then(val)
                 .map(|to| Rhs::Range {
                     from: None,
                     to: Some(to),
@@ -1281,9 +1448,9 @@ where
         let variable = var_path.map(|path| {
             let name = path.last().unwrap().clone();
             let namespace = path.iter().take(path.len() - 1).cloned().collect();
-            if name.starts_with('_') {
+            if let Some(name) = name.strip_prefix('_') {
                 Rhs::Var(Var::Predef {
-                    name: name[1..].to_string(),
+                    name: name.to_string(),
                     namespace,
                 })
             } else {
@@ -1327,12 +1494,22 @@ where
         .at_least(1)
         .collect::<Vec<Vec<String>>>();
 
+    let include_locations = locations.clone();
     let include = just(Token::OpAssignToLeft)
         .ignore_then(select! { Token::Path(p) => p.to_owned() })
         .then_ignore(just(Token::NewLine).repeated().at_least(1).or(end()))
-        .map(|path| StatementKindPass1::Include {
-            namespace: vec![],
-            path,
+        .try_map(move |path, span: SimpleSpan| {
+            constraints::check_assignment_target(source, span.start())
+                .map_err(|error| Rich::custom(span, error.to_string()))?;
+            if let Some(locations) = &include_locations {
+                locations
+                    .borrow_mut()
+                    .insert(span.start(), span.into_range());
+            }
+            Ok(StatementKindPass1::Include {
+                namespace: vec![],
+                path,
+            })
         });
 
     let block = file_content
@@ -1351,57 +1528,66 @@ where
                 .map(|(op, rhs)| (Some((op, rhs)), None))
                 .or(block.map(|stmts| (None, Some(stmts)))),
         )
-        .try_map(|(lhs_paths, (assignment_opt, block_opt)), span| {
-            if let Some(stmts) = block_opt {
-                if lhs_paths.len() > 1 {
-                    return Err(Rich::custom(
-                        span,
-                        "Namespace blocks cannot be defined for multiple paths at once.",
-                    ));
-                }
-                Ok(StatementKindPass1::VariableNamespaceBlock {
-                    ns: lhs_paths.into_iter().next().unwrap(),
-                    stmts: stmts.into_iter().map(Box::new).collect(),
-                })
-            } else if let Some((op, rhs)) = assignment_opt {
-                let vars = lhs_paths
-                    .into_iter()
-                    .map(|path| {
-                        let name = path.last().unwrap().clone();
-                        let namespace = path.iter().take(path.len() - 1).cloned().collect();
-                        if name.starts_with('_') {
-                            Var::Predef {
-                                name: name[1..].to_string(),
-                                namespace,
-                            }
-                        } else {
-                            Var::User { name, namespace }
-                        }
-                    })
-                    .collect::<Vec<Var>>();
-
-                match op {
-                    Operator::Left => {
-                        if rhs.len() > 1 && vars.len() != rhs.len() {
-                            return Err(Rich::custom(
-                                span,
-                                "Mismatched number of variables and values in assignment.",
-                            ));
-                        }
-                        if rhs.is_empty() {
-                            return Err(Rich::custom(span, "Missing right operand."));
-                        }
-                        Ok(StatementKindPass1::VariableDef(Statement::AssignLeft {
-                            lhs: vars,
-                            rhs,
-                            annotations: vec![],
-                        }))
+        .try_map(
+            move |(lhs_paths, (assignment_opt, block_opt)), span: SimpleSpan| {
+                if let Some(stmts) = block_opt {
+                    constraints::check_assignment_target(source, span.start())
+                        .map_err(|error| Rich::custom(span, error.to_string()))?;
+                    if lhs_paths.len() > 1 {
+                        return Err(Rich::custom(
+                            span,
+                            "Namespace blocks cannot be defined for multiple paths at once.",
+                        ));
                     }
+                    Ok(StatementKindPass1::VariableNamespaceBlock {
+                        ns: lhs_paths.into_iter().next().unwrap(),
+                        stmts: stmts.into_iter().map(Box::new).collect(),
+                    })
+                } else if let Some((op, rhs)) = assignment_opt {
+                    let vars = lhs_paths
+                        .into_iter()
+                        .map(|path| {
+                            let name = path.last().unwrap().clone();
+                            let namespace = path.iter().take(path.len() - 1).cloned().collect();
+                            if let Some(name) = name.strip_prefix('_') {
+                                Var::Predef {
+                                    name: name.to_string(),
+                                    namespace,
+                                }
+                            } else {
+                                Var::User { name, namespace }
+                            }
+                        })
+                        .collect::<Vec<Var>>();
+
+                    match op {
+                        Operator::Left => {
+                            if rhs.len() > 1 && vars.len() != rhs.len() {
+                                return Err(Rich::custom(
+                                    span,
+                                    "Mismatched number of variables and values in assignment.",
+                                ));
+                            }
+                            if rhs.is_empty() {
+                                return Err(Rich::custom(span, "Missing right operand."));
+                            }
+                            if let Some(locations) = &locations {
+                                locations
+                                    .borrow_mut()
+                                    .insert(span.start(), span.into_range());
+                            }
+                            Ok(StatementKindPass1::VariableDef(Statement::AssignLeft {
+                                lhs: vars,
+                                rhs,
+                                annotations: constraints::annotations_before(source, span.start()),
+                            }))
+                        }
+                    }
+                } else {
+                    unreachable!()
                 }
-            } else {
-                unreachable!()
-            }
-        });
+            },
+        );
 
     file_content
         .define(choice((include, statement_starting_with_path)).then_ignore(newlines.clone()));
@@ -1435,7 +1621,7 @@ where
 /// let result = compile_file(&path, None, None).unwrap();
 /// ```
 pub fn compile_file(
-    path: &std::path::PathBuf,
+    path: &std::path::Path,
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) -> anyhow::Result<Evaluated> {
@@ -1458,14 +1644,14 @@ pub fn compile_file(
 /// Returns an `Evaluated` result containing the parsed and resolved variables,
 /// or an error if parsing fails.
 pub fn compile_file_with_state(
-    path: &std::path::PathBuf,
+    path: &std::path::Path,
     start_line: Option<usize>,
     end_line: Option<usize>,
     var_state: Option<HashMap<Var, Rhs>>,
     out: impl std::io::Write,
     rich_out: bool,
 ) -> anyhow::Result<Evaluated> {
-    let file = std::fs::read_to_string(path.clone());
+    let file = std::fs::read_to_string(path);
     let file = match file {
         Ok(file) => Ok(file),
         Err(e) => match e.kind() {
@@ -1480,19 +1666,37 @@ pub fn compile_file_with_state(
         },
     }?;
     let start_line = start_line.map(|l| l.saturating_sub(1)).unwrap_or_default();
-    let lines = file.lines();
+    let lines = file.split_inclusive('\n');
     let end_line = end_line.unwrap_or(lines.clone().count()).saturating_sub(1);
     let selected_lines = lines
         .skip(start_line)
-        .take(end_line + 1 - start_line)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n"; // append newline as funny hack to fix one-line problems
+        .take(end_line.saturating_add(1).saturating_sub(start_line))
+        .collect::<String>()
+        + "\n"; // Keep original CRLF and byte positions; ensure a final newline.
 
     let dir = path.parent().ok_or(anyhow!(
         "Could not get parent directory of source code file."
     ))?;
-    compile_code_with_state(&selected_lines, dir, var_state, out, rich_out)
+    let offset = file
+        .split_inclusive('\n')
+        .take(start_line)
+        .map(str::len)
+        .sum();
+    let result = compile_with_context(
+        &selected_lines,
+        dir,
+        var_state,
+        out,
+        rich_out,
+        provenance::Context {
+            source: &selected_lines,
+            file: Some(path.to_path_buf()),
+            byte_offset: offset,
+            line_offset: start_line,
+            included_from: vec![],
+        },
+    )?;
+    Ok(result)
 }
 
 /// Tracks the history of variable definitions and provides resolution capabilities.
@@ -1506,6 +1710,7 @@ pub struct VariableHistory {
     /// The namespace context for this filtered view. When resolving variables,
     /// this namespace is prepended to variable names.
     namespace_context: Vec<String>,
+    trace: Rc<provenance::Trace>,
 }
 
 fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
@@ -1513,11 +1718,11 @@ fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
         return false;
     }
 
-    if sub.len() == 0 {
+    if sub.is_empty() {
         return false; // Empty is not a sub-namespace
     }
 
-    if super_namespace.len() == 0 {
+    if super_namespace.is_empty() {
         return false;
     }
 
@@ -1530,7 +1735,7 @@ fn is_sub_namespace(sub: &[String], super_namespace: &[String]) -> bool {
     true
 }
 
-fn remove_prefix_from_target(prefix_definer: &[String], target_vec: &Vec<String>) -> Vec<String> {
+fn remove_prefix_from_target(prefix_definer: &[String], target_vec: &[String]) -> Vec<String> {
     let prefix_len = prefix_definer.len();
     let target_len = target_vec.len();
     let compare_len = std::cmp::min(prefix_len, target_len);
@@ -1589,11 +1794,11 @@ fn truncate_namespace_stmt(ns: &[String], stmt: &Statement) -> Statement {
                     Var::Predef {
                         name: _,
                         namespace: var_ns,
-                    } => is_sub_namespace(ns, &var_ns),
+                    } => is_sub_namespace(ns, var_ns),
                     Var::User {
                         name: _,
                         namespace: var_ns,
-                    } => is_sub_namespace(ns, &var_ns),
+                    } => is_sub_namespace(ns, var_ns),
                 })
                 .map(|l| truncate_namespace_var(ns, l))
                 .collect::<Vec<_>>();
@@ -1641,7 +1846,7 @@ impl UsageStats {
 
 fn stmt_in_ns(namespace: &[String], stmt: &Statement) -> bool {
     match stmt {
-        Statement::AssignLeft { lhs, rhs: _, .. } => lhs.iter().any(|r| match r {
+        Statement::AssignLeft { lhs, .. } => lhs.iter().any(|r| match r {
             Var::Predef {
                 name: _,
                 namespace: var_ns,
@@ -1672,6 +1877,7 @@ impl VariableHistory {
             usage: Rc::new(RefCell::new(usage)),
             warn_on_drop: true,
             namespace_context: vec![],
+            trace: Rc::new(provenance::Trace::default()),
         }
     }
 
@@ -1691,27 +1897,22 @@ impl VariableHistory {
     }
 
     /// Populates the variable cache by evaluating all statements in the AST.
-    #[allow(unreachable_patterns)] // remove when adding more statments than just variables
     pub fn populate_cache(&mut self) {
-        self.ast.iter().for_each(|f| match f {
-            StatementKindOwned::VariableDef(statement) => match statement {
-                Statement::AssignLeft { lhs, rhs, .. } => {
-                    if rhs.len() == 1 {
-                        // Broadcast single RHS to all LHS
-                        let rhs_val = rhs.first().unwrap();
-                        for l in lhs {
-                            self.var_cache.insert(l.clone(), rhs_val.clone());
-                        }
-                    } else {
-                        // Pair LHS with RHS
-                        for (l, r) in lhs.iter().zip(rhs.iter()) {
-                            self.var_cache.insert(l.clone(), r.clone());
-                        }
-                    }
+        for StatementKindOwned::VariableDef(statement) in &self.ast {
+            let Statement::AssignLeft { lhs, rhs, .. } = statement;
+            if rhs.len() == 1 {
+                // Broadcast single RHS to all LHS
+                let rhs_val = rhs.first().unwrap();
+                for l in lhs {
+                    self.var_cache.insert(l.clone(), rhs_val.clone());
                 }
-            },
-            _ => {}
-        });
+            } else {
+                // Pair LHS with RHS
+                for (l, r) in lhs.iter().zip(rhs.iter()) {
+                    self.var_cache.insert(l.clone(), r.clone());
+                }
+            }
+        }
     }
 
     fn filter_by_namespace(
@@ -1748,9 +1949,11 @@ impl VariableHistory {
             match &stmt {
                 StatementKindOwned::VariableDef(rstmt) => {
                     if stmt_in_ns(namespace, rstmt) {
-                        let rhs = trunc_ns
-                            .then_some(truncate_namespace(namespace, stmt))
-                            .unwrap_or(stmt.clone());
+                        let rhs = if trunc_ns {
+                            truncate_namespace(namespace, stmt)
+                        } else {
+                            stmt.clone()
+                        };
                         vars_in_ns.push(rhs);
                     }
                 }
@@ -1851,14 +2054,14 @@ impl VariableHistory {
     /// A vector of tuples containing variables and their resolved values within the namespace.
     pub fn resolve_ns(&self, namespace: &[&str]) -> Vec<(Var, Rhs)> {
         let owned_ns = namespace
-            .into_iter()
+            .iter()
             .map(|s| (*s).to_owned())
             .collect::<Vec<_>>();
         self.filter_by_namespace(&owned_ns, None, true)
             .iter()
             .flat_map(|stmt| match stmt {
                 StatementKindOwned::VariableDef(statement) => match statement {
-                    Statement::AssignLeft { lhs, rhs: _, .. } => lhs
+                    Statement::AssignLeft { lhs, .. } => lhs
                         .iter()
                         .map(|lh| {
                             (
@@ -1886,7 +2089,7 @@ impl VariableHistory {
     /// * `namespace` - The namespace path to filter by
     pub fn filter_ns(&self, namespace: &[&str]) -> Self {
         let owned_ns = namespace
-            .into_iter()
+            .iter()
             .map(|s| (*s).to_owned())
             .collect::<Vec<_>>();
         // Truncate namespaces in the filtered AST for easier resolution
@@ -1904,6 +2107,7 @@ impl VariableHistory {
             usage: self.usage.clone(), // Share the same usage stats
             warn_on_drop: false,       // Don't warn on filtered namespaces
             namespace_context: new_context,
+            trace: self.trace.clone(),
         }
     }
 
@@ -1954,7 +2158,11 @@ impl VariableHistory {
         };
 
         self.usage.borrow_mut().record_evaluation(&full_var);
-        self.resolve_recursive(var, None)
+        let value = self.resolve_recursive(var, None)?;
+        if let Some(value) = &value {
+            value.validate_finite()?;
+        }
+        Ok(value)
     }
 }
 
@@ -2061,15 +2269,13 @@ fn parse_annotations(source_text: &str) -> HashMap<String, Vec<(usize, usize)>> 
             if let Some(at_pos) = comment_content.find("@") {
                 if at_pos == 0 {
                     let annotation_name = comment_content[1..].trim().to_string();
+                    if constraints::is_metadata(&annotation_name) {
+                        continue;
+                    }
 
                     // Detect if this annotation is directly before a namespace block
-                    let mut first_nonempty: Option<usize> = None;
-                    for k in (line_idx + 1)..lines.len() {
-                        if !lines[k].trim().is_empty() {
-                            first_nonempty = Some(k);
-                            break;
-                        }
-                    }
+                    let first_nonempty = (line_idx + 1..lines.len())
+                        .find(|&k| !lines[k].trim().is_empty());
 
                     let mut handled_block = false;
                     if let Some(first) = first_nonempty {
@@ -2078,8 +2284,8 @@ fn parse_annotations(source_text: &str) -> HashMap<String, Vec<(usize, usize)>> 
                             // Compute matching closing brace
                             let mut depth = 0isize;
                             let mut end_line = lines.len().saturating_sub(1);
-                            for k in first..lines.len() {
-                                let t = lines[k].trim();
+                            for (k, line) in lines.iter().enumerate().skip(first) {
+                                let t = line.trim();
                                 if t.ends_with('{') {
                                     depth += 1;
                                 }
@@ -2094,7 +2300,7 @@ fn parse_annotations(source_text: &str) -> HashMap<String, Vec<(usize, usize)>> 
 
                             annotations
                                 .entry(annotation_name.clone())
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push((first, end_line));
                             handled_block = true;
                         }
@@ -2108,7 +2314,7 @@ fn parse_annotations(source_text: &str) -> HashMap<String, Vec<(usize, usize)>> 
                     if let Some((prev_annotation, start_line)) = current_annotation.take() {
                         annotations
                             .entry(prev_annotation)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push((start_line, line_idx.saturating_sub(1)));
                     }
                     // Start new annotation (non-block)
@@ -2122,7 +2328,7 @@ fn parse_annotations(source_text: &str) -> HashMap<String, Vec<(usize, usize)>> 
                 // End line is the line before the empty line
                 annotations
                     .entry(annotation_name)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push((start_line + 1, line_idx - 1));
             }
         }
@@ -2133,11 +2339,17 @@ fn parse_annotations(source_text: &str) -> HashMap<String, Vec<(usize, usize)>> 
         let end_line = lines.len().saturating_sub(1);
         annotations
             .entry(annotation_name)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push((start_line + 1, end_line));
     }
 
     annotations
+}
+
+/// Directory that relative includes of source code resolve from. Where there is no
+/// working directory, as in the browser, that is `.`.
+pub(crate) fn working_dir() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
 /// Compiles ratslang source code from a string.
@@ -2165,8 +2377,10 @@ fn parse_annotations(source_text: &str) -> HashMap<String, Vec<(usize, usize)>> 
 /// let result = compile_code(code).unwrap();
 /// let distance = result.vars.resolve("distance").unwrap();
 /// ```
+///
+/// Relative includes resolve from the working directory.
 pub fn compile_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
-    let currdir = std::env::current_dir()?;
+    let currdir = working_dir();
     let original_source = source_code_raw.to_string();
     let mut result = compile_code_with_state(
         &(source_code_raw.to_owned() + "\n"), // hack to fix one-line token problems
@@ -2180,6 +2394,37 @@ pub fn compile_code(source_code_raw: &str) -> anyhow::Result<Evaluated> {
     result.source_text = original_source.clone();
     result.annotations = parse_annotations(&original_source);
     Ok(result)
+}
+
+/// A parser diagnostic with a byte range in the input source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceDiagnostic {
+    pub range: std::ops::Range<usize>,
+    pub message: String,
+}
+
+/// Report syntax errors using the compiler's parser without resolving includes.
+/// This is suitable for editor buffers that may contain incomplete statements.
+pub fn syntax_diagnostics(source: &str) -> Vec<SourceDiagnostic> {
+    let original_len = source.len();
+    let source_with_newline = format!("{source}\n");
+    let source = source_with_newline.as_str();
+    let tokens = Token::lexer(source)
+        .spanned()
+        .map(|(token, span)| (token.unwrap_or(Token::Error), span.into()));
+    let stream = Stream::from_iter(tokens)
+        .map((0..source.len()).into(), |(token, span): (_, _)| {
+            (token, span)
+        });
+    parser(source)
+        .parse(stream)
+        .into_errors()
+        .into_iter()
+        .map(|error| SourceDiagnostic {
+            range: error.span().start.min(original_len)..error.span().end.min(original_len),
+            message: error.reason().to_string(),
+        })
+        .collect()
 }
 
 /// Compiles ratslang source code with existing variable state.
@@ -2200,10 +2445,33 @@ pub fn compile_code_with_state(
     source_code_raw: &str,
     source_code_parent_dir: &std::path::Path,
     var_state: Option<HashMap<Var, Rhs>>,
-    mut out: impl std::io::Write,
+    out: impl std::io::Write,
     rich_out: bool,
 ) -> anyhow::Result<Evaluated> {
-    let token_iter = Token::lexer(&source_code_raw)
+    compile_with_context(
+        source_code_raw,
+        source_code_parent_dir,
+        var_state,
+        out,
+        rich_out,
+        provenance::Context {
+            source: source_code_raw,
+            file: None,
+            byte_offset: 0,
+            line_offset: 0,
+            included_from: vec![],
+        },
+    )
+}
+fn compile_with_context(
+    source_code_raw: &str,
+    source_code_parent_dir: &std::path::Path,
+    var_state: Option<HashMap<Var, Rhs>>,
+    mut out: impl std::io::Write,
+    rich_out: bool,
+    context: provenance::Context<'_>,
+) -> anyhow::Result<Evaluated> {
+    let token_iter = Token::lexer(source_code_raw)
         .spanned()
         // Convert logos errors into tokens. We want parsing to be recoverable and not fail at the lexing stage, so
         // we have a dedicated `Token::Error` variant that represents a token error that was previously encountered
@@ -2220,8 +2488,12 @@ pub fn compile_code_with_state(
         // This involves giving chumsky an 'end of input' span: we just use a zero-width span at the end of the string
         .map((0..source_code_raw.len()).into(), |(t, s): (_, _)| (t, s));
 
+    let locations: provenance::Locations = Default::default();
     // Parse the token stream with our chumsky parser
-    match parser().parse(token_stream).into_result() {
+    match parser_with_locations(source_code_raw, Some(locations.clone()))
+        .parse(token_stream)
+        .into_result()
+    {
         Ok(sexpr) => {
             let owned = sexpr
                 .into_iter()
@@ -2229,36 +2501,13 @@ pub fn compile_code_with_state(
                 .collect::<Vec<StatementKindOwnedPass1>>();
 
             // Pass 1 -- parsing included files and expanding namespaces
-            let mut ast = do_pass1(owned, source_code_parent_dir)?; // could print parse errors from included files
-
-            // Pass 2 -- needs entire ast for resolving. TODO could still be combined to Pass 1 with a subset of the ast to t-1.
-            // Resolve all variables here, else implicit strings in nested assigns are handled as variables.
-            // Use the repl state in case the user already run some variables from before which we want to build upon
-            let var_history = VariableHistory::new(ast.clone())
-                .with_state(var_state.clone().unwrap_or_default())
-                .with_drop_warning(false);
-            for (i, node) in ast.iter_mut().enumerate() {
-                match node {
-                    StatementKindOwned::VariableDef(statement) => {
-                        resolve_stmt(statement, &var_history, i)?;
-                    }
-                }
-            }
-
-            // Create the final VariableHistory that shares usage stats with var_history
-            // so that when it's dropped, it will warn about unused variables
-            let mut vars =
-                VariableHistory::new(ast.clone()).with_state(var_state.unwrap_or_default());
-            vars.usage = var_history.usage.clone();
-
-            // Parse annotations from source code
-            let annotations = parse_annotations(source_code_raw);
-
-            return Ok(Evaluated {
-                vars,
-                source_text: source_code_raw.to_string(),
-                annotations,
-            });
+            let parsed = do_pass1(
+                owned,
+                source_code_parent_dir,
+                &mut locations.borrow().values().cloned(),
+                &context,
+            )?;
+            return evaluate_parsed(parsed, var_state, source_code_raw);
         }
         Err(errs) => {
             let src = Source::from(source_code_raw);
@@ -2280,7 +2529,7 @@ pub fn compile_code_with_state(
                         "<{}-{}>  {}",
                         err.span().start,
                         err.span().end,
-                        err.reason().to_string(),
+                        err.reason(),
                     );
                     out.write_all(msg.as_bytes()).unwrap();
                 }
@@ -2289,6 +2538,53 @@ pub fn compile_code_with_state(
     }
 
     Err(anyhow!("Could not parse ratslang code."))
+}
+
+fn evaluate_parsed(
+    parsed: provenance::Parsed,
+    var_state: Option<HashMap<Var, Rhs>>,
+    source_code_raw: &str,
+) -> anyhow::Result<Evaluated> {
+    let original = parsed.ast.clone();
+    let mut ast = parsed.ast; // could print parse errors from included files
+
+    // Pass 2 -- needs entire ast for resolving. TODO could still be combined to Pass 1 with a subset of the ast to t-1.
+    // Resolve all variables here, else implicit strings in nested assigns are handled as variables.
+    // Use the repl state in case the user already run some variables from before which we want to build upon
+    let var_history = VariableHistory::new(ast.clone())
+        .with_state(var_state.clone().unwrap_or_default())
+        .with_drop_warning(false);
+    for (i, node) in ast.iter_mut().enumerate() {
+        match node {
+            StatementKindOwned::VariableDef(statement) => {
+                resolve_stmt(statement, &var_history, i)?;
+            }
+        }
+    }
+
+    // Create the final VariableHistory that shares usage stats with var_history
+    // so that when it's dropped, it will warn about unused variables
+    let mut vars = VariableHistory::new(ast.clone()).with_state(var_state.unwrap_or_default());
+    vars.usage = var_history.usage.clone();
+    vars.trace = Rc::new(provenance::Trace::build(
+        &original,
+        &ast,
+        &parsed.locations,
+        &vars.var_cache,
+    ));
+    if let Err(error) = vars.validate_constraints() {
+        vars.warn_on_drop = false;
+        return Err(error);
+    }
+
+    // Parse annotations from source code
+    let annotations = parse_annotations(source_code_raw);
+
+    Ok(Evaluated {
+        vars,
+        source_text: source_code_raw.to_string(),
+        annotations,
+    })
 }
 
 // -- Macros --

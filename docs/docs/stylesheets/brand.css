@@ -1,0 +1,12 @@
+/* Ratslang colours, from the jade brace of the logo. seakit.css does the rest. */
+[data-md-color-scheme="default"] {
+  --sk-brand: #22705f;
+  --sk-brand-strong: #185246;
+  --sk-brand-soft: #6cc6b1;
+}
+
+[data-md-color-scheme="slate"] {
+  --sk-brand: #6cc6b1;
+  --sk-brand-strong: #2d8b78;
+  --sk-brand-soft: #6cc6b1;
+}

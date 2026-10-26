@@ -1,3 +1,5 @@
-Cargo.lock
 target/
 **/.DS_Store
+docs/pygments-ratslang/build/
+docs/pygments-ratslang/*.egg-info/
+__pycache__/

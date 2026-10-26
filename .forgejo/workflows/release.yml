@@ -1,0 +1,473 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+# Release workflow for Ratslang. The schema is used until there is one for Forgejo.
+#
+# A v* tag builds the ratslang CLI and the ratslang-lsp language server for
+# Linux and macOS, attaches them to the Codeberg release of the tag, and
+# publishes them to the steado PPA, the AUR (ratslang and ratslang-bin) and the
+# uos/tools Homebrew tap. PyPI gets them as the ratslang-cli and ratslang-lsp
+# wheels, and cargo binstall downloads the release binaries. The VS Code
+# extension goes to the release, the Visual Studio Marketplace and Open VSX.
+#
+# Secrets:
+#   PPA_DEPLOY_KEY           SSH key of the ppa user on ppa.steado.tech
+#   AUR_SSH_KEY              SSH key of the AUR account that maintains the packages
+#   HOMEBREW_TAP_DEPLOY_KEY  deploy key with write access to github.com/uos/homebrew-tools
+#   PYPI_TOKEN               PyPI API token
+#   VSCE_PAT                 Azure DevOps token of the stelzo Marketplace publisher
+#   OVSX_PAT                 Open VSX token of the stelzo namespace
+
+name: release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+
+jobs:
+  # -------------------------------------------------------------------------
+  # LINUX
+  # Built on jammy, the oldest supported Ubuntu, so the binaries and the deb
+  # run on every later release and on Arch.
+  # -------------------------------------------------------------------------
+
+  linux:
+    runs-on: ubuntu-dev-resolute
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            apt_deps: ""
+          - target: aarch64-unknown-linux-gnu
+            apt_deps: "gcc-aarch64-linux-gnu"
+    container:
+      image: docker.io/stelzo/ubuntu-dev:jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+          APT_DEPS: ${{ matrix.apt_deps }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y ca-certificates curl build-essential git $APT_DEPS
+          # ratslang-lsp needs a newer Rust than the image may ship
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+
+          cargo build --locked --target "$RUST_TARGET" --profile full-release --package ratslang-cli --package ratslang-lsp
+          cargo deb --package ratslang-cli --target "$RUST_TARGET" --no-build --profile full-release
+
+          # Release assets are the raw files, suffixed with the target so they stay unique.
+          mkdir -p out
+          cp "target/$RUST_TARGET/full-release/ratslang" "out/ratslang-$RUST_TARGET"
+          cp "target/$RUST_TARGET/full-release/ratslang-lsp" "out/ratslang-lsp-$RUST_TARGET"
+          (cd out && for f in ratslang-*; do sha256sum "$f" > "$f.sha256"; done)
+          find "target/$RUST_TARGET/debian" -name "*.deb" -exec cp {} out/ \;
+      - name: Upload binaries
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: out/*
+
+  # -------------------------------------------------------------------------
+  # MACOS
+  # -------------------------------------------------------------------------
+
+  macos-aarch64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        env:
+          RUST_TARGET: aarch64-apple-darwin
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          cargo build --locked --target "$RUST_TARGET" --profile full-release --package ratslang-cli --package ratslang-lsp
+
+          mkdir -p out
+          cp "target/$RUST_TARGET/full-release/ratslang" "out/ratslang-$RUST_TARGET"
+          cp "target/$RUST_TARGET/full-release/ratslang-lsp" "out/ratslang-lsp-$RUST_TARGET"
+          (cd out && for f in ratslang-*; do shasum -a 256 "$f" > "$f.sha256"; done)
+      - name: Upload binaries
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifacts-aarch64-apple-darwin
+          path: out/*
+
+  # -------------------------------------------------------------------------
+  # VS CODE EXTENSION
+  # The extension keeps its own version in vscode/package.json. Both stores
+  # skip a version they already have.
+  # -------------------------------------------------------------------------
+
+  vscode-extension:
+    runs-on: ubuntu-dev-noble
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Package
+        working-directory: vscode
+        run: |
+          npm ci
+          npm test
+          npx --yes @vscode/vsce@3 package --out ratslang.vsix
+      - name: Upload extension
+        uses: actions/upload-artifact@v3
+        with:
+          name: vscode-extension
+          path: vscode/ratslang.vsix
+
+  # -------------------------------------------------------------------------
+  # PYTHON WHEELS
+  # ratslang-cli and ratslang-lsp as binary wheels, so `pip install` and
+  # `uv tool install` work without a Rust toolchain.
+  # -------------------------------------------------------------------------
+
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            zig: "no"
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-dev-resolute
+            zig: "yes"
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-dev-resolute
+            zig: "yes"
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-dev-resolute-arm
+            zig: "no"
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+      USE_ZIG: ${{ matrix.zig }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" != *apple-darwin* ]]; then
+            apt-get update -y
+            apt-get install -y musl-tools patchelf
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$TARGET"
+
+          ZIG=""
+          if [ "$USE_ZIG" = "yes" ]; then
+            ZIG="--zig"
+          fi
+          # maturin only infers musllinux when zig names the target libc. A native
+          # static musl build has no dynamic deps and would be tagged manylinux.
+          COMPAT=""
+          if [ "$USE_ZIG" = "no" ] && [[ "$TARGET" == *-musl* ]]; then
+            COMPAT="--compatibility musllinux_1_2"
+          fi
+          for crate in ratslang-cli ratslang-lsp; do
+            maturin build $ZIG $COMPAT --manifest-path "$crate/Cargo.toml" --release --locked --target "$TARGET" --out target/wheels
+          done
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: target/wheels
+
+  wheels-aarch64-gnu:
+    # Built natively in jammy, which pins glibc 2.35 and so the
+    # manylinux_2_35_aarch64 tag. Newer runners have a glibc no manylinux
+    # policy covers, and PyPI rejects the resulting linux_aarch64 tag.
+    runs-on: ubuntu-latest-arm
+    container:
+      image: docker.io/stelzo/ubuntu-dev:jammy
+    env:
+      TARGET: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        run: |
+          set -euo pipefail
+          apt-get update -y
+          apt-get install -y patchelf
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$TARGET"
+          for crate in ratslang-cli ratslang-lsp; do
+            maturin build --manifest-path "$crate/Cargo.toml" --release --locked --target "$TARGET" --out target/wheels
+          done
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: target/wheels
+
+  # Source distributions, pip builds from source when no wheel matches.
+  sdist:
+    runs-on: ubuntu-dev-resolute
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdists
+        run: |
+          set -euo pipefail
+          for crate in ratslang-cli ratslang-lsp; do
+            maturin sdist --manifest-path "$crate/Cargo.toml" --out target/wheels
+          done
+      - name: Upload sdists
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: target/wheels
+
+  # -------------------------------------------------------------------------
+  # CODEBERG RELEASE
+  # -------------------------------------------------------------------------
+
+  create-release:
+    runs-on: ubuntu-dev-resolute
+    needs: [linux, macos-aarch64, vscode-extension]
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      - name: List downloaded artifacts (for verification)
+        run: ls -R artifacts
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          REPO="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}"
+          SERVER="${FORGEJO_SERVER_URL:-https://codeberg.org}"
+
+          tea login add --name codeberg --url "${SERVER}" --token "${GITHUB_TOKEN}"
+          tea release delete --repo "${REPO}" --confirm "${TAG}" || true
+
+          # The wheels go to PyPI, not to the release.
+          ASSET_FLAGS=""
+          while IFS= read -r f; do
+            ASSET_FLAGS="${ASSET_FLAGS} --asset ${f}"
+          done <<EOF
+          $(find artifacts -type f -not -path "artifacts/wheels/*" | sort)
+          EOF
+
+          tea release create \
+            --login codeberg \
+            --repo "${REPO}" \
+            --tag "${TAG}" \
+            --title "${TAG}" \
+            --note "Release ${TAG}
+
+          ### Artifacts
+          - \`ratslang-<target>\` and \`ratslang-lsp-<target>\` binaries for Linux and macOS
+          - The \`ratslang\` Debian package with both, also in the steado PPA
+          - The VS Code extension as \`ratslang.vsix\`, also on the Visual Studio Marketplace and Open VSX
+          - Python wheels published to PyPI as \`ratslang-cli\` and \`ratslang-lsp\`" \
+            ${ASSET_FLAGS}
+
+  # -------------------------------------------------------------------------
+  # PACKAGES
+  # -------------------------------------------------------------------------
+
+  release-ppa:
+    runs-on: ubuntu-dev-resolute
+    needs: [create-release]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download debs
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+      - name: Push to PPA
+        env:
+          PPA_DEPLOY_KEY: ${{ secrets.PPA_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends openssh-client rsync
+
+          # The jammy build runs on every later release, so each series gets the same debs.
+          mapfile -t debs < <(find artifacts -name "*.deb" -type f)
+          if [ "${#debs[@]}" -eq 0 ]; then
+            echo "No debs found" >&2
+            exit 1
+          fi
+          for series in jammy noble resolute; do
+            mkdir -p "upload/ubuntu/pool/main/${series}"
+            cp "${debs[@]}" "upload/ubuntu/pool/main/${series}/"
+          done
+
+          # The server prunes old versions and signs the apt metadata.
+          mkdir -p ~/.ssh
+          printf '%s\n' "$PPA_DEPLOY_KEY" > ~/.ssh/ppa_key
+          chmod 600 ~/.ssh/ppa_key
+          echo "[ppa.steado.tech]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvqpiJdvk+zuDXcjOgNdA3p98+6L7MAnhOEOLrw4phX" > ~/.ssh/ppa_known_hosts
+          PPA_SSH="ssh -i $HOME/.ssh/ppa_key -p 2222 -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/ppa_known_hosts -o StrictHostKeyChecking=yes"
+          rsync -rt --chmod=F644,D755 -e "$PPA_SSH" upload/ ppa@ppa.steado.tech:
+          $PPA_SSH ppa@ppa.steado.tech publish
+          shred -u ~/.ssh/ppa_key || rm -f ~/.ssh/ppa_key
+
+  aur-publish:
+    runs-on: ubuntu-dev-resolute
+    # ratslang-bin downloads the noble debs from the PPA
+    needs: [release-ppa]
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ratslang
+            folder: arch
+          - package: ratslang-bin
+            folder: arch-bin
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Deps
+        run: |
+          pacman -Sy --noconfirm openssl openssh git nodejs sudo base-devel
+          useradd -m build
+          echo "build ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/build
+      - uses: actions/checkout@v4
+      - name: Update AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          PACKAGE: ${{ matrix.package }}
+          FOLDER: ${{ matrix.folder }}
+        run: |
+          mkdir -p /home/build/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > /home/build/.ssh/aur_key
+          chmod 600 /home/build/.ssh/aur_key
+          ssh-keyscan aur.archlinux.org >> /home/build/.ssh/known_hosts
+          chown -R build:build . /home/build/.ssh
+
+          sudo -u build env \
+            GIT_SSH_COMMAND='ssh -i /home/build/.ssh/aur_key -o UserKnownHostsFile=/home/build/.ssh/known_hosts -o StrictHostKeyChecking=yes' \
+            FORGEJO_REPOSITORY="${FORGEJO_REPOSITORY:-${GITHUB_REPOSITORY}}" \
+            FORGEJO_SHA="${FORGEJO_SHA:-${GITHUB_SHA}}" \
+            PACKAGE="$PACKAGE" FOLDER="$FOLDER" \
+            bash << 'EOF'
+            set -euo pipefail
+            git config --global user.email "$(git log -1 --pretty=format:'%ae')"
+            git config --global user.name "$(git log -1 --pretty=format:'%an')"
+            # Cloning a package that does not exist yet gives an empty repository, and the push creates it.
+            git clone "ssh://aur@aur.archlinux.org/${PACKAGE}.git" aur
+            cp "packaging/${FOLDER}/PKGBUILD" aur/
+            cd aur
+            makepkg --printsrcinfo > .SRCINFO
+            git add -f .SRCINFO PKGBUILD
+            git commit -m "Update package from $FORGEJO_REPOSITORY@$FORGEJO_SHA" || echo "No changes"
+            git push origin HEAD:master
+          EOF
+          shred -u /home/build/.ssh/aur_key
+
+  homebrew-publish:
+    runs-on: ubuntu-dev-resolute
+    needs: [create-release]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: artifacts-aarch64-apple-darwin
+          path: macos
+      - name: Compute checksums and fill in the formula
+        run: |
+          set -euo pipefail
+          VERSION="${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}"
+          VERSION="${VERSION#v}"
+          sha() { sha256sum "$1" | awk '{print $1}'; }
+          sed -e "s/VERSION_PLACEHOLDER/${VERSION}/g" \
+              -e "s/RATSLANG_SHA256_PLACEHOLDER/$(sha macos/ratslang-aarch64-apple-darwin)/g" \
+              -e "s/RATSLANG_LSP_SHA256_PLACEHOLDER/$(sha macos/ratslang-lsp-aarch64-apple-darwin)/g" \
+            packaging/homebrew/ratslang.rb > ratslang.rb
+          if grep -q "_PLACEHOLDER" ratslang.rb; then
+            echo "Unreplaced placeholder in ratslang.rb" >&2
+            exit 1
+          fi
+      - name: Push to Homebrew tap
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          apt-get update && apt-get install -y openssh-client
+          mkdir -p ~/.ssh
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes'
+          git clone --depth 1 git@github.com:uos/homebrew-tools.git tap
+          mkdir -p tap/Formula
+          cp ratslang.rb tap/Formula/ratslang.rb
+          cd tap
+          git config user.email "stelzo@steado.de"
+          git config user.name "stelzo"
+          git add Formula/ratslang.rb
+          git commit -m "Update ratslang to ${FORGEJO_REF_NAME:-${GITHUB_REF_NAME}}" || echo "No changes"
+          git push origin main
+          shred -u ~/.ssh/deploy_key || rm -f ~/.ssh/deploy_key
+
+  publish-pypi:
+    runs-on: ubuntu-dev-resolute
+    needs: [create-release, wheels, wheels-aarch64-gnu, sdist]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download wheels and sdists
+        uses: actions/download-artifact@v3
+        with:
+          name: wheels
+          path: dist
+      - name: Get twine
+        run: uv tool install twine
+      - name: Publish to PyPI
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          set -euo pipefail
+          ls -lh dist/*.whl dist/*.tar.gz
+          twine upload \
+            --username __token__ \
+            --password "${PYPI_TOKEN}" \
+            --non-interactive \
+            --skip-existing \
+            dist/*.whl dist/*.tar.gz
+
+  publish-vscode:
+    runs-on: ubuntu-dev-noble
+    needs: [create-release]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download extension
+        uses: actions/download-artifact@v3
+        with:
+          name: vscode-extension
+          path: dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Publish to the Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce@3 publish --packagePath dist/ratslang.vsix --skip-duplicate
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --yes ovsx@0 publish --packagePath dist/ratslang.vsix --skip-duplicate

@@ -1,336 +1,90 @@
-<p align="center">
-  <h3 align="center">Ratslang</h3>
-  <p align="center">A compact configuration language for physical systems.</p>
-  <p align="center"><a href="https://crates.io/crates/ratslang"><img src="https://img.shields.io/crates/v/ratslang.svg" alt=""></a>
-  </p>
-</p>
+<img src="https://codeberg.org/stelzo/ratslang/raw/branch/main/docs/docs/images/ratslang.svg" alt="Ratslang logo" width="160" align="right">
 
-Ratslang is a compact **configuration language**, delivered as a [Rust library](https://crates.io/crates/ratslang).
+# Ratslang
 
-It was born out of frustration with the lack of proper types for **time** and **length** in configuration files. When we configure physical systems like robots, even a single zero more or less can have massive consequences. Sometimes, we don't even realize there's a problem until it's too late. The famous [Loss of the Mars Climate Orbiter](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter) is a prime example of this issue.
+A compact configuration language for physical systems, with typed units,
+readable defaults, and Rust integration.
 
-The core motivations behind Ratslang are:
-
-* **Solving units:** The language should inherently handle units when configuring physical systems.
-* **Combining configs:** It should be easier to combine existing configuration files rather than copying them.
-* **Simple and extensible:** The implementation should be small, simple, and easy to extend.
-* **Type-safe units:** Physical values are stored using the [`uom`](https://crates.io/crates/uom) crate with full precision - no rounding.
-
-Let's take a look at how it works:
-
-~~~awk
-# a comment
-variable = true
-
-time = 1s
-time_is_running = 1ms..2min # ranges convert automatically
-
-# nanometers and micrometers for precision work
-precision_length = 500nm..10um
-
-len = 1cm..1m
-
-# _ signals a variable the interpreter is looking for.
-_internal = time_is_running
-
-my.super.long.prefix.var = 0..100 # ranges on namespaced variable "var"
-
-# nested
-my.super {
-
-    long.prefix {
-        next_var = "UTF-🎱 Strings"
-    }
-
-    something_else = -99.018
-}
-
-mat = [ [ 6, 1, 9 ],
-        [ 3, 1, 8 ] ]
-~~~
-
-Currently, Ratslang doesn't support expressions like arithmetic, loops, or conditional statements. This is a deliberate choice, and it's still undecided if it will ever include such features. Some keywords are already reserved for potential future use.
-
----
-
-## Variables
-
-* **Dynamic types**
-* **Mutable**
-* **Copy-on-assignment**
-* **C-style naming**
-
----
-
-## Types
-
-* **Boolean**: `true`, `false`
-* **Integer**: Example: `42`, `-100`
-* **Floating-point**: Example: `69.42`, `-3.14`
-* **String**: Quotes can be omitted if the string doesn't conflict with a previously defined variable. Example: `"my string"`, `another_string_without_quotes`
-* **Path**: Example: `./somewhere/relative.dat`, `/or/absolute`, `./../backneed/dotfirst.launch.py`
-* **Array/Matrix**: Newlines after commas are also supported for readability. `[ <Type>, <Type>, ... ]`, `[ 42, World, [ "nested" ] ]`, `[ [ 1, 2, 3 ], [ 4, 5, 6 ] ]`
-* **Time** (stored as `uom::si::f64::Time`):
-    * **Second** with SI prefixes: `ys` through `Ys` (e.g., `10s`, `0.5s`, `1ms`, `2ks`)
-    * **Hour**: `h`, `hour`, `hours`. Example: `2h`, `1.5hour`
-    * **Minute**: `min`, `minute`, `minutes`. Example: `30min`, `5minutes`
-    * **Year**: `a`, `year`, `years`. Example: `1a`, `2.5years`
-    * **Day**: `d`, `day`, `days`. Example: `7d`, `1.5days`
-    * **Shake**: `shake`, `shakes`. Example: `10shake`
-    * **Sidereal variants** (astronomical): `second_sidereal`, `hour_sidereal`, `day_sidereal`, `year_sidereal`. Example: `1day_sidereal`, `23.5hours_sidereal`
-    * **Tropical year**: `year_tropical`, `years_tropical`. Example: `1year_tropical`
-* **Length** (stored as `uom::si::f64::Length`):
-    * **Meter** with SI prefixes: `ym` through `Ym` (e.g., `10m`, `0.5m`, `1mm`, `2km`)
-    * **Imperial/US**: `ft`/`foot`, `in`/`inch`, `mi`/`mile`, `yd`/`yard`. Example: `5ft`, `12inches`, `3.5miles`
-    * **Other common**: `ch`/`chain`, `rd`/`rod`, `fathom`. Example: `1fathom`, `2chains`
-    * **Astronomical**: `ua`/`astronomical_unit`, `light_year`, `parsec` (or `l.y.`, `pc`). Example: `1.5au`, `4.37light_years`
-    * **Nautical**: `M`/`nautical_mile`. Example: `10nautical_miles`
-    * **Small units**: `angstrom` (or `Å`), `micron` (or `µ`), `mil`, `microinch`. Example: `10angstrom`, `0.5microns`
-    * **Atomic**: `bohr_radius` (or `a₀`), `fermi`. Example: `1bohr_radius`
-* **Range**: Including unbound variants and empty `..`.
-    * **Time**: Example: `1ms..5.3h`, `6s..`, `30min..2d`
-    * **Length**: Example: `1mm..100m`, `..4m`
-    * **Numbers**: Example: `-4..l`, `6.00001..6.0001`
-
----
-
-## Includes
-
-In Ratslang, including is done by assigning a path to the current namespace. All variables will then get the respective prefix.
-
-~~~awk
-= ./path_relative_to_current_file.rl
-
-strangefile {
-  = ./../namespacing_contents.rl
-}
-~~~
-
----
-
-## Annotations
-
-Annotations allow you to mark sections of your configuration for selective extraction and filtering. This is particularly useful for generating minimal configurations, feature-specific settings, or environment-dependent parameters.
-
-### Basic Usage
-
-Annotate a single line with `# @annotation_name`:
-
-~~~awk
-# @minimal
-timeout = 5000
-
-# @dev
-debug_enabled = true
-
-production_only = false
-~~~
-
-Annotate an entire namespace block:
-
-~~~awk
-# @minimal
+```awk
 sensor {
-    type = Lidar
-    range = 100m
+  distance = 25cm
+  timeout = 500ms
 }
+backend = CPU
+```
 
-sensor.calibration_file = /path/to/calibration.dat
-~~~
+Ratslang supports namespaces, includes, references, arrays, ranges, and physical
+quantities. Comments can describe settings and declare constraints. Ratslang also
+provides serde integration, source-preserving edits, a configuration CLI, and an
+LSP.
 
-### Extracting Annotations
+## Getting started
 
-Use `to_string_filtered()` to extract only annotated sections:
-
-~~~rust
-use ratslang::compile_code;
-
-let source = r#"
-    # @minimal
-    timeout = 5000
-    
-    # @minimal
-    sensor {
-        type = Lidar
-    }
-    
-    sensor.range = 100m
-"#;
-
-let ast = compile_code(source).unwrap();
-let minimal_config = ast.to_string_filtered("minimal").unwrap();
-// Result: only timeout and sensor block
-~~~
-
-### Use Cases
-
-- **Minimal configurations:** Use `@minimal` to generate deployment-ready configs with only essential parameters
-- **Feature flags:** Use `@feature_name` to extract configurations for specific features  
-- **Environment-specific settings:** Use `@prod`, `@dev`, `@test` for environment variants
-- **Documentation examples:** Use `@documented` to generate user-facing configuration examples
-
----
-
-## Library Usage
-
-Add this to your `Cargo.toml`.
-
-~~~toml
+```toml
 [dependencies]
-ratslang = "0.4.1"
-~~~
+ratslang = "0.5.0"
+```
 
-First, you compile a Ratslang file to get a cleaned Abstract Syntax Tree (AST) with all variables resolved.
+```rust
+let config = ratslang::compile_code("sensor.distance = 25cm\n")?;
+let distance = config.vars.resolve("sensor.distance")?;
+```
 
-~~~rust
-let file = std::path::Path::new("./your_file.rl");
-let ast = ratslang::compile_file(&file.to_path_buf(), None, None).unwrap();
-~~~
+See [getting started](https://stelzo.codeberg.page/ratslang/getting-started/) for serde configuration and
+defaults. The core compiler requires Rust 1.85.1 or newer. The LSP requires Rust
+1.95 or newer.
 
-Then, you can safely read the variables you need — either with the provided helper macros for concise code, or manually using Rust's powerful pattern matching.
+## Documentation
 
-Using helper macros (recommended):
+| Guide | Covers |
+| --- | --- |
+| [Language](https://stelzo.codeberg.page/ratslang/language/values/) | Values, assignments, arrays, ranges, and references |
+| [Units](https://stelzo.codeberg.page/ratslang/language/units/) | Time, length, mass, angle, frequency, velocity, and acceleration |
+| [Schemas](https://stelzo.codeberg.page/ratslang/schemas/) | Enums, bounds, required settings, and deprecations |
+| [Serde](https://stelzo.codeberg.page/ratslang/rust/serde/) | Derived Rust config types and typed uom quantities |
+| [Editing](https://stelzo.codeberg.page/ratslang/rust/document-editing/) | Preserve comments, includes, and original source |
+| [Compiler](https://stelzo.codeberg.page/ratslang/rust/compiler/) | Resolved values, macros, and provenance |
+| [API reference](https://docs.rs/ratslang) | Published Rust APIs |
 
-~~~rust
-use ratslang::{
-    compile_file,
-    resolve_string, resolve_bool, resolve_int, resolve_float,
-    resolve_int_range, resolve_length_range_meters_float, resolve_time_range_seconds_float,
-    resolve_path,
-};
+[Documentation source](https://codeberg.org/stelzo/ratslang/src/branch/main/docs/docs) ·
+[Website](https://stelzo.codeberg.page/ratslang/) ·
+[Build the documentation](https://codeberg.org/stelzo/ratslang/src/branch/main/docs/README.md)
 
-// Local configs combining user vars and optional defaults
-struct Configs {
-    user: ratslang::VariableHistory,
-    defaults: ratslang::VariableHistory,
-}
+## Editor support
 
-let file = std::path::Path::new("./your_file.rl");
-let ast = compile_file(&file.to_path_buf(), None, None).unwrap();
-let configs = Configs { user: ast.vars, defaults: ratslang::VariableHistory::new(vec![]) };
+The LSP uses local or HTTPS defaults for completion, hover docs, diagnostics,
+definitions, and fixes. See the [editor guide](https://stelzo.codeberg.page/ratslang/editors/).
 
-// Simple values
-let name: String = resolve_string!(configs, "name")?;
-let enabled: bool = resolve_bool!(configs, "variable")?;
-let k: i64 = resolve_int!(configs, "k_neighbors")?;
-let ratio: f64 = resolve_float!(configs, "something_else")?;
+### Install the server
 
-// Paths
-let path: String = resolve_path!(configs, "_file")?; // e.g., `_file = /abs/or/relative`
+```sh
+cargo install ratslang-lsp --locked
+```
 
-// Ranges (with sensible defaults used when bounds are missing)
-let (d_min, d_max) = resolve_length_range_meters_float!(configs, "len", 0.0, 10.0)?; // meters as f64
-let (t_min, t_max) = resolve_time_range_seconds_float!(configs, "time_is_running", 0.0, 60.0)?; // seconds as f64
-let (i_min, i_max) = resolve_int_range!(configs, "my.super.long.prefix.var", 0, 100)?;
-~~~
+Ensure `~/.cargo/bin` is on the editor's PATH.
 
-Working with uom types directly:
+### Helix
 
-Physical values in Ratslang are stored as `uom` types (`Length` and `Time`), giving you full access to type-safe unit conversions:
+Follow the [Helix setup](https://stelzo.codeberg.page/ratslang/editors/helix/) for LSP and tree-sitter.
 
-~~~rust
-use ratslang::{compile_code, Rhs, Val, UnitVal, Unit};
-use ratslang::{meter, millimeter, micrometer, nanometer};  // Length units
-use ratslang::{second, millisecond, microsecond, nanosecond};  // Time units
+### Neovim
 
-let code = r#"
-    sensor_range = 500um
-    timeout = 1500ns
-"#;
+Follow the [Neovim 0.11+ setup](https://stelzo.codeberg.page/ratslang/editors/neovim/) for the native client.
 
-let ast = compile_code(code).unwrap();
+### VS Code
 
-// Get a length value and convert to any unit
-if let Some(Rhs::Val(Val::UnitedVal(uv))) = ast.vars.resolve("sensor_range").unwrap() {
-    // Access the underlying uom::si::f64::Length
-    let length = uv.as_length().unwrap();
-    
-    // Convert to any unit with full precision using uom getters
-    println!("Range: {} micrometers", length.get::<micrometer>());  // 500.0
-    println!("Range: {} millimeters", length.get::<millimeter>());  // 0.5
-    println!("Range: {} meters", length.get::<meter>());            // 0.0005
-    println!("Range: {} nanometers", length.get::<nanometer>());    // 500000.0
-}
+Follow the [VS Code setup](https://stelzo.codeberg.page/ratslang/editors/vscode/) to install the extension.
 
-// Get a time value
-if let Some(Rhs::Val(Val::UnitedVal(uv))) = ast.vars.resolve("timeout").unwrap() {
-    let time = uv.as_time().unwrap();
-    
-    // Convert to any unit with full precision using uom getters
-    println!("Timeout: {} nanoseconds", time.get::<nanosecond>());   // 1500.0
-    println!("Timeout: {} microseconds", time.get::<microsecond>()); // 1.5
-    println!("Timeout: {} milliseconds", time.get::<millisecond>()); // 0.0015
-}
-~~~
+## Command-line tools
 
-Manual resolution:
+```sh
+cargo install ratslang-cli --locked
+```
 
-~~~rust
-use anyhow::anyhow;
-use ratslang::{compile_file, Rhs, Val, NumVal};
-
-// Local configs combining user vars and optional defaults
-struct Configs {
-    user: ratslang::VariableHistory,
-    defaults: ratslang::VariableHistory,
-}
-
-let file = std::path::Path::new("./your_file.rl");
-let ast = compile_file(&file.to_path_buf(), None, None).unwrap();
-let vars = ast.vars.filter_ns(&["_my_namespace"]);
-
-// Resolve a variable and pattern-match its type manually
-let value = vars
-    .resolve("_some_var")?
-    .map_or(Ok("a_default_value".to_owned()), |rhs| {
-        Ok(match rhs {
-            Rhs::Val(Val::StringVal(s)) => s,
-            _ => {
-                return Err(anyhow!(
-                    "Unexpected type for _my_namespace._some_var, expected String."
-                ));
-            }
-        })
-    })?;
-
-// Or use the generic resolve_var! macro
-use ratslang::resolve_var;
-let configs = Configs { user: vars, defaults: ratslang::VariableHistory::new(vec![]) };
-let k_neighbors: usize = resolve_var!(configs, k_neighborhood, as usize,
-    Rhs::Val(Val::NumVal(NumVal::Integer(i))) => { i }
-)?;
-~~~
-
----
-
-* Ratslang files typically use the `.rl` extension.
-* Syntax highlighting is available with [this tree-sitter grammar](https://codeberg.org/stelzo/tree-sitter-ratslang) or this [VS Code extension](https://marketplace.visualstudio.com/items?itemName=stelzo.ratslang). For Markdown files, you can use the `awk` language for syntax highlighting. It is not perfect but works reasonably well.
-* Compile errors are beautifully rendered thanks to [Ariadne](https://crates.io/crates/ariadne) ❤️.
-
-*Ratslang: More a slang, less a lang.*
-
----
-
-## Future Plans
-
-The following features and improvements are planned:
-
-* **Expanded Units and Scales**: Add more unit types (mass, angle, temperature, etc.) powered by the `uom` crate.
-* **Opt-in Language Versioning**: Implement an opt-in versioning system for `.rl` files.
-
----
+Use `check`, `fmt`, `explain`, `generate`, `minimize`, and `migrate` to inspect and
+edit configuration. See the [CLI guide](https://stelzo.codeberg.page/ratslang/tools/cli/).
 
 ## License
 
-<sup>
-Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
-2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
-</sup>
-
-<br>
-
-<sub>
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
-be dual licensed as above, without any additional terms or conditions.
-</sub>
+MIT OR Apache-2.0. See [LICENSE-MIT](https://codeberg.org/stelzo/ratslang/src/branch/main/LICENSE-MIT) and
+[LICENSE-APACHE](https://codeberg.org/stelzo/ratslang/src/branch/main/LICENSE-APACHE).

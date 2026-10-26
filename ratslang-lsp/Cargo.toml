@@ -1,25 +1,29 @@
 [package]
 name = "ratslang-lsp"
-version = "0.1.0"
-edition = "2024"
-authors = ["Christopher Sieh <stelzo@steado.de>"]
+version.workspace = true
+edition.workspace = true
 description = "Language Server Protocol implementation for Ratslang"
-license = "MIT OR Apache-2.0"
-rust-version = "1.85"
+license.workspace = true
+repository.workspace = true
+rust-version = "1.95"
+
+[package.metadata.binstall]
+pkg-url = "https://codeberg.org/stelzo/ratslang/releases/download/v{ version }/ratslang-lsp-{ target }{ binary-ext }"
+pkg-fmt = "bin"
 
 [dependencies]
-ratslang = { path = "../ratslang" }
-tree-sitter-ratslang = { git = "https://codeberg.org/stelzo/tree-sitter-ratslang" }
-tower-lsp-server = "0.23"
-tokio = { version = "1", features = ["full"] }
-tree-sitter = "0.25"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-dashmap = "6"
-parking_lot = "0.12"
+ratslang.workspace = true
+tree-sitter-ratslang = "0.2.0"
+tower-lsp-server = "0.23.0"
+tokio = { version = "1.54.1", features = ["full"] }
+tree-sitter = "0.27.1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1.0.154"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+dashmap = "6.2.1"
+parking_lot = "0.13.0"
 
 [dev-dependencies]
-pretty_assertions = "1"
+pretty_assertions = "1.4.1"

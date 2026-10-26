@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ratslang-lsp"
+description = "Language server for Ratslang configuration files"
+readme = "README.md"
+dynamic = ["version"]
+requires-python = ">=3.8"
+license = { text = "MIT OR Apache-2.0" }
+keywords = ["config", "robotics", "ratslang", "lsp"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Rust",
+  "Topic :: Text Editors :: Integrated Development Environments (IDE)",
+]
+
+[project.urls]
+Documentation = "https://stelzo.codeberg.page/ratslang/editors/"
+Repository = "https://codeberg.org/stelzo/ratslang"
+
+[tool.maturin]
+bindings = "bin"

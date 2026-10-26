@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Ratslang</title>
+  <desc id="desc">A compact rat with an organic curly-brace tail flowing into its back and haunch.</desc>
+  <path d="M34 23C16 23 32 49 12 61c21 11 3 37 23 37l15-5" stroke="#2D8B78" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M42 94C32 83 32 67 43 55c9-10 24-14 37-5-2-9 6-16 12-12 6 3 7 10 2 15l23 18c-9 8-19 10-27 7l-7 10 6 6q3 4-2 4H77l-7-6-12 6H45Z" fill="#2D8B78"/>
+  <circle cx="100" cy="65" r="2.5" fill="#fff"/>
+</svg>
