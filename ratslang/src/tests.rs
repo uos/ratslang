@@ -1,7 +1,7 @@
 use super::*;
 use log::{LevelFilter, Log, Metadata, Record};
 use std::sync::{
-    Mutex, Once,
+    Mutex, MutexGuard, Once,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -45,14 +45,24 @@ impl TestLogger {
         }
     }
 
+    /// Captures this thread's log records until the guard drops. Tests run in
+    /// parallel and share the logger, so one test captures at a time.
     fn capture_guard(&'static self) -> CaptureGuard {
+        let exclusive = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.clear();
         self.set_capture(true);
-        CaptureGuard { logger: self }
+        CaptureGuard {
+            logger: self,
+            _exclusive: exclusive,
+        }
     }
 }
 
+static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
 struct CaptureGuard {
     logger: &'static TestLogger,
+    _exclusive: MutexGuard<'static, ()>,
 }
 
 impl Drop for CaptureGuard {
@@ -465,7 +475,6 @@ fn evaluate_stats_only_marks_used_without_resolution() {
 #[test]
 fn warns_on_unevaluated_variable_logs_message() {
     init_test_logger();
-    TEST_LOGGER.clear();
     let _guard = TEST_LOGGER.capture_guard();
 
     {
@@ -482,7 +491,6 @@ fn warns_on_unevaluated_variable_logs_message() {
 #[test]
 fn no_warning_when_marked_evaluated() {
     init_test_logger();
-    TEST_LOGGER.clear();
     let _guard = TEST_LOGGER.capture_guard();
 
     {

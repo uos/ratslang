@@ -15,6 +15,9 @@ jobs:
         run: python3 scripts/check_docs.py
       - name: Build documentation
         run: |
+          # The highlighter builds the tree-sitter-ratslang Python binding, which needs Python.h
+          apt-get update
+          apt-get install -y python3-dev
           cd docs
           uvx --from zensical==0.0.71 --with ./pygments-ratslang zensical build --clean --strict
       - name: Deploy to Codeberg Pages
