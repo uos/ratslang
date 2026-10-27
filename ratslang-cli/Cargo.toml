@@ -11,10 +11,6 @@ readme = "README.md"
 homepage = "https://stelzo.codeberg.page/ratslang/tools/cli/"
 rust-version.workspace = true
 
-[[bin]]
-name = "ratslang"
-path = "src/main.rs"
-
 [package.metadata.binstall]
 pkg-url = "https://codeberg.org/stelzo/ratslang/releases/download/v{ version }/ratslang-{ target }{ binary-ext }"
 pkg-fmt = "bin"
@@ -31,6 +27,10 @@ assets = [
   ["target/release/ratslang-lsp", "usr/bin/ratslang-lsp", "755"],
   ["../README.md", "usr/share/doc/ratslang/README.md", "644"],
 ]
+
+[[bin]]
+name = "ratslang"
+path = "src/main.rs"
 
 [dependencies]
 ratslang.workspace = true

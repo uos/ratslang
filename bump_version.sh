@@ -3,8 +3,7 @@
 # Example: ./bump_version.sh 0.5.0
 #
 # Bumps the workspace version, which ratslang, ratslang-cli and ratslang-lsp
-# share, and the AUR packages. The VS Code extension keeps its own version in
-# vscode/package.json.
+# share, the AUR packages and the VS Code extension.
 
 set -euo pipefail
 
@@ -69,6 +68,10 @@ for pkgbuild in packaging/arch/PKGBUILD packaging/arch-bin/PKGBUILD; do
     sed_i -e "s/^pkgver=.*/pkgver=${NEW_VERSION}/" -e "s/^pkgrel=.*/pkgrel=1/" "$pkgbuild"
 done
 
+# The VS Code extension shares the release version
+sed_i -E "s/^(  \"version\": \")[^\"]+/\1${NEW_VERSION}/" vscode/package.json
+sed_i -E "/^  \"name\": \"ratslang\"|^      \"name\": \"ratslang\"/{n;s/(\"version\": \")[^\"]+/\1${NEW_VERSION}/;}" vscode/package-lock.json
+
 # The versions named in the docs and READMEs
 echo ""
 echo "── Syncing versions in the docs ──────────────────────────────────────"
@@ -80,4 +83,4 @@ cargo update --workspace
 
 echo ""
 echo "── git diff ──────────────────────────────────────────────────────────"
-git diff -- "$CARGO_TOML" Cargo.lock packaging README.md docs/docs
+git diff -- "$CARGO_TOML" Cargo.lock packaging vscode/package.json vscode/package-lock.json README.md docs/docs
