@@ -1,7 +1,7 @@
 # ratslang-cli
 
 The `ratslang` command checks, formats, explains and migrates
-[Ratslang](https://stelzo.codeberg.page/ratslang/) configuration files.
+[Ratslang](https://ratslang.steado.tech/) configuration files.
 
 ```sh
 ratslang check friday.rl
@@ -12,7 +12,7 @@ ratslang minimize friday.rl
 ratslang migrate friday.rl
 ```
 
-The [CLI guide](https://stelzo.codeberg.page/ratslang/tools/cli/) shows each
+The [CLI guide](https://ratslang.steado.tech/tools/cli/) shows each
 command by example. The language server is
 [ratslang-lsp](https://crates.io/crates/ratslang-lsp).
 

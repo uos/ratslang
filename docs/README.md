@@ -15,7 +15,7 @@ release. Update them together.
 
 The Forgejo workflow builds and checks documentation on pull requests and pushes.
 On `main` pushes, release tags, or a manual run on `main`, it deploys `docs/site/`
-to `https://stelzo.codeberg.page/ratslang/`. The workflow uses the runner's existing Rust, Python, and uv.
+to `https://ratslang.steado.tech/`. The workflow uses the runner's existing Rust, Python, and uv.
 
 The published Rust API stays on docs.rs. This site explains the language,
 integrations, and tools. Keep the root README brief and link readers here.

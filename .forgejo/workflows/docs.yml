@@ -20,10 +20,20 @@ jobs:
           apt-get install -y python3-dev
           cd docs
           uvx --from zensical==0.0.71 --with ./pygments-ratslang zensical build --clean --strict
-      - name: Deploy to Codeberg Pages
+      - name: Deploy to ratslang.steado.tech
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-        uses: https://codeberg.org/git-pages/action@v2
-        with:
-          site: https://${{ forge.repository_owner }}.codeberg.page/ratslang/
-          token: ${{ forge.token }}
-          source: docs/site/
+        env:
+          DOCS_DEPLOY_KEY: ${{ secrets.DOCS_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends rsync openssh-client
+          key="$(mktemp)"
+          hosts="$(mktemp)"
+          trap 'rm -f "$key" "$hosts"' EXIT
+          printf '%s\n' "$DOCS_DEPLOY_KEY" >"$key"
+          echo "[ratslang.steado.tech]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBvqpiJdvk+zuDXcjOgNdA3p98+6L7MAnhOEOLrw4phX" >"$hosts"
+          # The key may only rsync into /var/www/ratslang.steado.tech (rrsync on the server).
+          rsync -rlt --checksum --delete --delay-updates --chmod=D755,F644 --stats \
+            -e "ssh -p 2222 -i $key -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=$hosts -o StrictHostKeyChecking=yes" \
+            docs/site/ ratslang-docs@ratslang.steado.tech:

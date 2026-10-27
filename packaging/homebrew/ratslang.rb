@@ -2,7 +2,7 @@
 # Template file. CI fills in the version and one checksum per downloaded file before publishing to the tap.
 class Ratslang < Formula
   desc "Configuration language for building physical systems in Rust: CLI and language server"
-  homepage "https://stelzo.codeberg.page/ratslang/"
+  homepage "https://ratslang.steado.tech/"
   version "VERSION_PLACEHOLDER"
   license any_of: ["MIT", "Apache-2.0"]
 
