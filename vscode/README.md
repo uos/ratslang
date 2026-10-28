@@ -1,7 +1,7 @@
 # Ratslang for VS Code
 
 Syntax highlighting, completion, hover docs, diagnostics and quick fixes for
-[Ratslang](https://ratslang.steado.tech/) `.rl` configuration files.
+[Ratslang](https://ratslang.steado.tech/docs/) `.rl` configuration files.
 
 ```rl
 # @schema ./default.rl
@@ -34,8 +34,8 @@ containers, install the server where the extension runs.
 
 ## More
 
-The [editor guide](https://ratslang.steado.tech/editors/vscode/) covers
-setup in detail, and the [schema guide](https://ratslang.steado.tech/schemas/)
+The [editor guide](https://ratslang.steado.tech/docs/editors/vscode/) covers
+setup in detail, and the [schema guide](https://ratslang.steado.tech/docs/schemas/)
 covers the rules a defaults file can carry.
 
 To work on the extension, run `npm ci` in `vscode/` and press F5 for an

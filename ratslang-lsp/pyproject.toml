@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [project.urls]
-Documentation = "https://ratslang.steado.tech/editors/"
+Documentation = "https://ratslang.steado.tech/docs/editors/"
 Repository = "https://codeberg.org/stelzo/ratslang"
 
 [tool.maturin]

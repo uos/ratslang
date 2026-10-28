@@ -45,7 +45,7 @@ class RatslangLexer(Lexer):
     name = "Ratslang"
     aliases = ["ratslang", "rl"]
     filenames = ["*.rl"]
-    url = "https://ratslang.steado.tech/"
+    url = "https://ratslang.steado.tech/docs/"
 
     def get_tokens_unprocessed(self, text):
         data = text.encode()

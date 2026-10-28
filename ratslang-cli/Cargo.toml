@@ -8,7 +8,7 @@ license.workspace = true
 keywords = ["config", "cli", "robotics"]
 categories = ["command-line-utilities", "config"]
 readme = "README.md"
-homepage = "https://ratslang.steado.tech/tools/cli/"
+homepage = "https://ratslang.steado.tech/docs/tools/cli/"
 rust-version.workspace = true
 
 [package.metadata.binstall]

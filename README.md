@@ -30,7 +30,7 @@ let config = ratslang::compile_code("sensor.distance = 25cm\n")?;
 let distance = config.vars.resolve("sensor.distance")?;
 ```
 
-See [getting started](https://ratslang.steado.tech/getting-started/) for serde configuration and
+See [getting started](https://ratslang.steado.tech/docs/getting-started/) for serde configuration and
 defaults. The core compiler requires Rust 1.85.1 or newer. The LSP requires Rust
 1.95 or newer.
 
@@ -38,22 +38,22 @@ defaults. The core compiler requires Rust 1.85.1 or newer. The LSP requires Rust
 
 | Guide | Covers |
 | --- | --- |
-| [Language](https://ratslang.steado.tech/language/values/) | Values, assignments, arrays, ranges, and references |
-| [Units](https://ratslang.steado.tech/language/units/) | Time, length, mass, angle, frequency, velocity, and acceleration |
-| [Schemas](https://ratslang.steado.tech/schemas/) | Enums, bounds, required settings, and deprecations |
-| [Serde](https://ratslang.steado.tech/rust/serde/) | Derived Rust config types and typed uom quantities |
-| [Editing](https://ratslang.steado.tech/rust/document-editing/) | Preserve comments, includes, and original source |
-| [Compiler](https://ratslang.steado.tech/rust/compiler/) | Resolved values, macros, and provenance |
+| [Language](https://ratslang.steado.tech/docs/language/values/) | Values, assignments, arrays, ranges, and references |
+| [Units](https://ratslang.steado.tech/docs/language/units/) | Time, length, mass, angle, frequency, velocity, and acceleration |
+| [Schemas](https://ratslang.steado.tech/docs/schemas/) | Enums, bounds, required settings, and deprecations |
+| [Serde](https://ratslang.steado.tech/docs/rust/serde/) | Derived Rust config types and typed uom quantities |
+| [Editing](https://ratslang.steado.tech/docs/rust/document-editing/) | Preserve comments, includes, and original source |
+| [Compiler](https://ratslang.steado.tech/docs/rust/compiler/) | Resolved values, macros, and provenance |
 | [API reference](https://docs.rs/ratslang) | Published Rust APIs |
 
 [Documentation source](https://codeberg.org/stelzo/ratslang/src/branch/main/docs/docs) ·
-[Website](https://ratslang.steado.tech/) ·
+[Website](https://ratslang.steado.tech/docs/) ·
 [Build the documentation](https://codeberg.org/stelzo/ratslang/src/branch/main/docs/README.md)
 
 ## Editor support
 
 The LSP uses local or HTTPS defaults for completion, hover docs, diagnostics,
-definitions, and fixes. See the [editor guide](https://ratslang.steado.tech/editors/).
+definitions, and fixes. See the [editor guide](https://ratslang.steado.tech/docs/editors/).
 
 ### Install the server
 
@@ -65,15 +65,15 @@ Ensure `~/.cargo/bin` is on the editor's PATH.
 
 ### Helix
 
-Follow the [Helix setup](https://ratslang.steado.tech/editors/helix/) for LSP and tree-sitter.
+Follow the [Helix setup](https://ratslang.steado.tech/docs/editors/helix/) for LSP and tree-sitter.
 
 ### Neovim
 
-Follow the [Neovim 0.11+ setup](https://ratslang.steado.tech/editors/neovim/) for the native client.
+Follow the [Neovim 0.11+ setup](https://ratslang.steado.tech/docs/editors/neovim/) for the native client.
 
 ### VS Code
 
-Follow the [VS Code setup](https://ratslang.steado.tech/editors/vscode/) to install the extension.
+Follow the [VS Code setup](https://ratslang.steado.tech/docs/editors/vscode/) to install the extension.
 
 ## Command-line tools
 
@@ -82,7 +82,7 @@ cargo install ratslang-cli --locked
 ```
 
 Use `check`, `fmt`, `explain`, `generate`, `minimize`, and `migrate` to inspect and
-edit configuration. See the [CLI guide](https://ratslang.steado.tech/tools/cli/).
+edit configuration. See the [CLI guide](https://ratslang.steado.tech/docs/tools/cli/).
 
 ## License
 

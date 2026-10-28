@@ -3,7 +3,7 @@
 site_name = "Ratslang"
 site_description = "A compact configuration language with physical units, schemas, and typed Rust integration."
 site_author = "stelzo <stelzo@steado.de>"
-site_url = "https://ratslang.steado.tech/"
+site_url = "https://ratslang.steado.tech/docs/"
 repo_url = "https://codeberg.org/stelzo/ratslang"
 repo_name = "stelzo/ratslang"
 copyright = "Copyright &copy; 2026 stelzo"
