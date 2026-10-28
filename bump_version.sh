@@ -1,26 +1,37 @@
 #!/usr/bin/env bash
-# Usage: ./bump_version.sh <new-version>
+# Usage: ./bump_version.sh [<new-version>]
 # Example: ./bump_version.sh 0.5.0
+#
+# Without a version, scripts/semver_check.py proposes the smallest one the
+# changes allow. A given version must be at least that. Set
+# SKIP_SEMVER_CHECK=1 to skip the check.
 #
 # Bumps the workspace version, which ratslang, ratslang-cli and ratslang-lsp
 # share, the AUR packages and the VS Code extension.
 
 set -euo pipefail
 
-NEW_VERSION="${1:-}"
-if [[ -z "$NEW_VERSION" ]]; then
-    echo "Usage: $0 <new-version>"
-    echo "Example: $0 0.5.0"
-    exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?(\+[a-zA-Z0-9._-]+)?$ ]]; then
+NEW_VERSION="${1:-}"
+if [[ -n "$NEW_VERSION" && ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?(\+[a-zA-Z0-9._-]+)?$ ]]; then
     echo "Error: version must be semver format (e.g. 1.2.3 or 1.2.3-alpha.1)"
     exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+if [[ "${SKIP_SEMVER_CHECK:-0}" == "1" ]]; then
+    if [[ -z "$NEW_VERSION" ]]; then
+        echo "Usage: $0 <new-version> (SKIP_SEMVER_CHECK needs a version)"
+        exit 1
+    fi
+elif [[ -z "$NEW_VERSION" ]]; then
+    NEW_VERSION="$(python3 scripts/semver_check.py)"
+    read -r -p "Bump to $NEW_VERSION? [y/N] " answer
+    [[ "$answer" =~ ^[Yy]$ ]] || exit 1
+else
+    python3 scripts/semver_check.py "$NEW_VERSION"
+fi
 
 CARGO_TOML="Cargo.toml"
 
