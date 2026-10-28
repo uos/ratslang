@@ -8,8 +8,8 @@ license.workspace = true
 keywords = ["config", "lang", "parser", "robotics"]
 categories = ["science::robotics", "parser-implementations"]
 readme = "../README.md"
-documentation = "https://docs.rs/ratslang"
-homepage = "https://lib.rs/crates/ratslang"
+documentation = "https://ratslang.steado.tech/docs/"
+homepage = "https://ratslang.steado.tech"
 rust-version.workspace = true
 
 [package.metadata.docs.rs]
