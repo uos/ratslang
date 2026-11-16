@@ -2,7 +2,7 @@
 
 Annotations allow you to mark sections of your configuration for selective extraction and filtering. This is particularly useful for generating minimal configurations, feature-specific settings, or environment-dependent parameters.
 
-### Basic Usage
+### Basic usage
 
 Annotate a single line with `# @annotation_name`:
 
@@ -28,7 +28,7 @@ whiskers {
 whiskers.calibration_file = /path/to/whiskers.yaml
 ~~~
 
-### Extracting Annotations
+### Extracting annotations
 
 Use `to_string_filtered()` to extract only annotated sections:
 
@@ -52,7 +52,7 @@ let minimal_config = ast.to_string_filtered("minimal").unwrap();
 // Result: only nap_after and the whiskers block
 ~~~
 
-### Use Cases
+### Use cases
 
 - **Minimal configurations:** Use `@minimal` to generate deployment-ready configs with only essential parameters
 - **Feature flags:** Use `@feature_name` to extract configurations for specific features  
