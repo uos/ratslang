@@ -12,7 +12,7 @@ class Ratslang < Formula
       sha256 "RATSLANG_SHA256_PLACEHOLDER"
 
       resource "ratslang-lsp" do
-        url "https://codeberg.org/stelzo/ratslang/releases/download/v#{version}/ratslang-lsp-aarch64-apple-darwin"
+        url "https://codeberg.org/stelzo/ratslang/releases/download/vVERSION_PLACEHOLDER/ratslang-lsp-aarch64-apple-darwin"
         sha256 "RATSLANG_LSP_SHA256_PLACEHOLDER"
       end
     end
