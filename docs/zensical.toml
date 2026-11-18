@@ -83,3 +83,14 @@ toggle.name = "Switch to system preference"
 
 [project.theme.icon]
 repo = "fontawesome/brands/git-alt"
+
+# Both code hosts in the footer, so the code stays reachable when one is down.
+[[project.extra.social]]
+icon = "simple/codeberg"
+link = "https://codeberg.org/stelzo/ratslang"
+name = "Code on Codeberg"
+
+[[project.extra.social]]
+icon = "simple/github"
+link = "https://github.com/uos/ratslang"
+name = "Mirror on GitHub"
