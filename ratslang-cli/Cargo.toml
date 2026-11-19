@@ -19,6 +19,7 @@ pkg-fmt = "bin"
 # ratslang-lsp before packaging.
 [package.metadata.deb]
 name = "ratslang"
+maintainer = "stelzo <stelzo@steado.de>"
 section = "devel"
 priority = "optional"
 extended-description = "The ratslang command checks, formats, explains and migrates Ratslang configuration files. ratslang-lsp is the language server for editors."
